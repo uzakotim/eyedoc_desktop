@@ -1,0 +1,26 @@
+{
+  "name": "eyedoc_desktop",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev:backend": "python backend/app.py",
+    "start": "source .venv/bin/activate && concurrently \"npm run dev:frontend\" \"python3 backend/app.py\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/uzakotim/eyedoc_desktop.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/uzakotim/eyedoc_desktop/issues"
+  },
+  "homepage": "https://github.com/uzakotim/eyedoc_desktop#readme",
+  "dependencies": {
+    "concurrently": "^10.0.6"
+  }
+}
