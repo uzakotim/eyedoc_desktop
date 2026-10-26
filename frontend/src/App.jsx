@@ -181,18 +181,17 @@ export default function App() {
       {/* Outer rounded container with glowing glassmorphic background */}
       <div className="w-full h-full flex flex-col rounded-2xl bg-slate-950/92 backdrop-blur-2xl border border-white/15 shadow-[0_12px_36px_rgba(0,0,0,0.65),0_0_0_1px_rgba(255,255,255,0.06)] overflow-hidden">
         {/* Header bar (Drag Region) */}
-        <header className="drag-region pywebview-drag-region h-9 min-h-[36px] px-3 flex items-center justify-between border-b border-white/10 bg-slate-900/60 cursor-grab active:cursor-grabbing">
+        <header className="drag-region pywebview-drag-region h-9 min-h-[36px] px-3 flex items-center justify-between bg-slate-900cursor-grab active:cursor-grabbing">
           {/* Left: Branding & Status Dot */}
           <div className="flex items-center gap-2 pointer-events-none">
-            <div className="relative flex items-center justify-center">
+            {/* <div className="relative flex items-center justify-center">
               <span
-                className={`w-2.5 h-2.5 rounded-full ${
-                  status.connected && status.streaming
-                    ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)] animate-pulse'
-                    : 'bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.6)]'
-                }`}
+                className={`w-2.5 h-2.5 rounded-full ${status.connected && status.streaming
+                  ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)] animate-pulse'
+                  : 'bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.6)]'
+                  }`}
               />
-            </div>
+            </div> */}
             <div className="flex items-center gap-1.5">
               <span className="text-xs font-semibold tracking-tight text-white/90">
                 EyeDoc
@@ -211,18 +210,17 @@ export default function App() {
               title={`Switch camera index (current: #${status.camera_index ?? 0})`}
               className="px-1.5 py-0.5 rounded-md text-[11px] font-semibold text-white/60 hover:text-white hover:bg-white/10 border border-white/10 transition-colors"
             >
-              #{status.camera_index ?? 0} ⇄
+              {status.camera_index ?? 0} ⇄
             </button>
 
             {/* Mirror Toggle Button */}
             <button
               onClick={handleToggleMirror}
               title={status.mirror ? 'Mirror: On' : 'Mirror: Off'}
-              className={`p-1 rounded-md text-xs transition-colors ${
-                status.mirror
-                  ? 'text-indigo-400 bg-indigo-500/15 hover:bg-indigo-500/25'
-                  : 'text-white/50 hover:text-white/90 hover:bg-white/10'
-              }`}
+              className={`p-1 rounded-md text-xs transition-colors ${status.mirror
+                ? 'text-indigo-400 bg-indigo-500/15 hover:bg-indigo-500/25'
+                : 'text-white/50 hover:text-white/90 hover:bg-white/10'
+                }`}
             >
               <svg
                 className="w-3.5 h-3.5"
@@ -246,11 +244,10 @@ export default function App() {
             <button
               onClick={handleToggleCamera}
               title={status.streaming ? 'Pause Camera' : 'Resume Camera'}
-              className={`p-1 rounded-md text-xs transition-colors ${
-                status.streaming
-                  ? 'text-white/60 hover:text-white hover:bg-white/10'
-                  : 'text-amber-400 bg-amber-500/20 hover:bg-amber-500/30'
-              }`}
+              className={`p-1 rounded-md text-xs transition-colors ${status.streaming
+                ? 'text-white/60 hover:text-white hover:bg-white/10'
+                : 'text-amber-400 bg-amber-500/20 hover:bg-amber-500/30'
+                }`}
             >
               {status.streaming ? (
                 <svg
@@ -306,7 +303,7 @@ export default function App() {
         </header>
 
         {/* Video Viewport Container */}
-        <div className="relative flex-1 m-2 rounded-xl bg-slate-900/90 overflow-hidden border border-white/10 flex items-center justify-center">
+        <div className="relative flex-1 m-2 rounded-xl bg-slate-900/90 overflow-hidden flex items-center justify-center">
           {/* Live Video Feed Image */}
           {frameSrc ? (
             <img
@@ -323,24 +320,21 @@ export default function App() {
 
           {/* Floating HUD Badges */}
           <div
-            className={`absolute inset-x-2 top-2 flex justify-between pointer-events-none transition-opacity duration-200 ${
-              showControls ? 'opacity-100' : 'opacity-85'
-            }`}
+            className={`absolute inset-x-2 top-2 flex justify-between pointer-events-none transition-opacity duration-200 ${showControls ? 'opacity-100' : 'opacity-85'
+              }`}
           >
             {/* Live Indicator Badge */}
             <span
-              className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold tracking-wider backdrop-blur-md ${
-                status.connected && status.streaming
-                  ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-500/40'
-                  : 'bg-amber-950/80 text-amber-300 border border-amber-500/40'
-              }`}
+              className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold tracking-wider backdrop-blur-md ${status.connected && status.streaming
+                ? 'bg-emerald-950/80 text-emerald-300'
+                : 'bg-amber-950/80 text-amber-300'
+                }`}
             >
               <span
-                className={`w-1.5 h-1.5 rounded-full ${
-                  status.connected && status.streaming
-                    ? 'bg-emerald-400 animate-ping'
-                    : 'bg-amber-400'
-                }`}
+                className={`w-1.5 h-1.5 rounded-full ${status.connected && status.streaming
+                  ? 'bg-emerald-400 animate-ping'
+                  : 'bg-amber-400'
+                  }`}
               />
               {status.connected && status.streaming ? 'LIVE' : 'STANDBY'}
             </span>
@@ -375,11 +369,11 @@ export default function App() {
         </div>
 
         {/* Footer info bar */}
-        <footer className="h-6 min-h-[24px] px-3 flex items-center justify-between text-[10px] text-white/40 border-t border-white/5 bg-slate-950/80">
-          <span className="flex items-center gap-1">
+        <footer className="h-6 min-h-[4px] px-3 py-1 flex items-center justify-end text-[8px] text-white/40 bg-slate-950">
+          {/* <span className="flex items-center gap-1">
             <span className="w-1 h-1 rounded-full bg-indigo-400/60" />
             OpenCV Video Feed
-          </span>
+          </span> */}
           <span className="text-white/30">Click tray icon or Esc to hide</span>
         </footer>
       </div>
