@@ -1,14 +1,15 @@
+#!/usr/bin/env bash
+set -e
+
 source .venv/bin/activate
 
-# Run frontend build
-cd frontend
-npm run build
+# 1. Build frontend
+echo "→ Building frontend..."
+cd frontend && npm run build && cd ..
 
-# Run backend build
-cd ..
-# If windows
-if [ $(uname) == "Windows_NT" ]; then
-    pyinstaller --noconsole --onefile --add-data "frontend/dist;frontend/dist" backend/app.py
-else
-    pyinstaller --noconsole --onefile --add-data "frontend/dist:frontend/dist" backend/app.py
-fi
+# 2. Build macOS .app bundle via spec file
+echo "→ Building EyeDoc.app with PyInstaller..."
+pyinstaller --noconfirm app.spec
+
+echo "✓ Build complete. Output: dist/EyeDoc.app"
+echo "  Run with:  open dist/EyeDoc.app"
