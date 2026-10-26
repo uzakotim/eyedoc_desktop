@@ -121,6 +121,16 @@ export default function App() {
     }
   }, [])
 
+  const handleClose = async () => {
+    if (window.pywebview?.api?.quit_app) {
+      try {
+        await window.pywebview.api.quit_app()
+      } catch (e) {
+        console.error(e)
+      }
+    }
+  }
+
   const handleToggleMirror = async (e) => {
     e.stopPropagation()
     if (window.pywebview?.api?.toggle_mirror) {
@@ -196,8 +206,8 @@ export default function App() {
               <span className="text-xs font-semibold tracking-tight text-white/90">
                 EyeDoc
               </span>
-              <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-indigo-500/20 text-indigo-300 font-medium border border-indigo-500/30">
-                Cam #{status.camera_index ?? 0}
+              <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-indigo-500/20 text-indigo-400 font-medium">
+                Cam {status.camera_index ?? 0}
               </span>
             </div>
           </div>
@@ -282,8 +292,8 @@ export default function App() {
 
             {/* Close / Hide Button */}
             <button
-              onClick={handleHide}
-              title="Hide to system tray (Esc)"
+              onClick={handleClose}
+              title="Close"
               className="p-1 rounded-md text-white/50 hover:text-rose-400 hover:bg-rose-500/20 transition-colors ml-0.5"
             >
               <svg

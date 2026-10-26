@@ -77,7 +77,7 @@ class DesktopApi:
     def hide_window(self):
         self.hide_fn()
         return {"status": "hidden"}
-
+        
     def quit_app(self):
         self.quit_fn()
         return {"status": "quitting"}
