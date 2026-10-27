@@ -20,6 +20,42 @@ export default function App() {
   const [isRetrying, setIsRetrying] = useState(false)
   const [showControls, setShowControls] = useState(false)
   const prevBlobUrlRef = useRef(null)
+  const [blinkStatus, setBlinkStatus] = useState({
+    blink_count: 0,
+    interval_blink_count: 0,
+    last_interval_warning: false,
+    last_interval_count: null,
+  })
+
+  // Poll blink counter status every second
+  useEffect(() => {
+    let active = true
+
+    const checkBlinkStatus = async () => {
+      try {
+        if (window.pywebview?.api?.get_blink_status) {
+          const result = await window.pywebview.api.get_blink_status()
+
+          if (active && result) {
+            setBlinkStatus((prev) => ({
+              ...prev,
+              ...result,
+            }))
+          }
+        }
+      } catch (err) {
+        console.warn('Could not fetch blink status:', err)
+      }
+    }
+
+    checkBlinkStatus()
+    const intervalId = setInterval(checkBlinkStatus, 1000)
+
+    return () => {
+      active = false
+      clearInterval(intervalId)
+    }
+  }, [])
 
   // Initialize port from pywebview API if available
   useEffect(() => {
@@ -354,6 +390,29 @@ export default function App() {
               <span className="px-2 py-0.5 rounded-full text-[10px] font-medium text-white/70 bg-black/60 backdrop-blur-md border border-white/10">
                 {status.fps > 0 ? `${status.fps} FPS` : '30 FPS'}
               </span>
+            )}
+          </div>
+
+          {/* Blink Counter Overlay */}
+          <div className="absolute left-2 bottom-2 z-10 flex flex-col gap-1 pointer-events-none">
+            <div className="rounded-lg border border-white/15 bg-slate-950/85 backdrop-blur-md px-3 py-2 shadow-lg">
+              <div className="text-[9px] uppercase tracking-wider text-white/50">
+                Total blinks
+              </div>
+
+              <div className="text-2xl leading-tight font-bold text-white tabular-nums">
+                {blinkStatus.blink_count ?? 0}
+              </div>
+
+              <div className="mt-1 text-[10px] text-indigo-300">
+                This minute: {blinkStatus.interval_blink_count ?? 0}
+              </div>
+            </div>
+
+            {blinkStatus.last_interval_warning && (
+              <div className="rounded-md bg-amber-950/90 border border-amber-400/30 px-2 py-1 text-[10px] font-medium text-amber-300">
+                Low blink rate — take a break
+              </div>
             )}
           </div>
 
