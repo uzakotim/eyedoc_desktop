@@ -1,24 +1,33 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_all
+
+datas_mp, binaries_mp, hiddenimports_mp = collect_all('mediapipe')
 
 a = Analysis(
     ['backend/app.py'],
-    pathex=['backend'],          # so camera.py / tray.py / stream_server.py are found
-    binaries=[],
-    datas=[('frontend/dist', 'frontend/dist')],
+    pathex=['backend'],
+    binaries=binaries_mp,
+    datas=[
+        ('frontend/dist', 'frontend/dist'),
+        ('backend/models', 'backend/models'),
+    ] + datas_mp,
     hiddenimports=[
         'camera',
         'stream_server',
+        'blink_counter_server',
         'tray',
         'cv2',
         'numpy',
         'bottle',
+        'cheroot',
+        'cheroot.wsgi',
         'pystray',
         'PIL',
         'PIL.Image',
         'PIL.ImageDraw',
         'webview',
         'webview.platforms.cocoa',
-    ],
+    ] + hiddenimports_mp,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -31,8 +40,8 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    [],                         # onedir: binaries/datas go in COLLECT, not merged here
-    exclude_binaries=True,      # required for onedir mode
+    [],
+    exclude_binaries=True,
     name='EyeDoc',
     debug=False,
     bootloader_ignore_signals=False,
@@ -40,7 +49,7 @@ exe = EXE(
     upx=False,
     console=False,
     disable_windowed_traceback=False,
-    argv_emulation=True,        # Required on macOS for proper Finder/event handling
+    argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
@@ -54,7 +63,7 @@ coll = COLLECT(
     strip=False,
     upx=False,
     upx_exclude=[],
-    name='EyeDoc',              # goes to dist/EyeDoc/
+    name='EyeDoc',
 )
 
 app = BUNDLE(
@@ -68,11 +77,10 @@ app = BUNDLE(
         'CFBundleVersion': '1.0.0',
         'CFBundleShortVersionString': '1.0.0',
         'CFBundleIdentifier': 'com.eyedoc.desktop',
-        'NSCameraUsageDescription': 'EyeDoc uses the camera to display your front camera feed in the menu bar.',
+        'NSCameraUsageDescription': 'EyeDoc requires camera access for the live preview and blink counter.',
         'LSUIElement': True,
         'LSMultipleInstancesProhibited': True,
         'NSHighResolutionCapable': True,
         'NSRequiresAquaSystemAppearance': False,
     },
 )
-

@@ -1,6 +1,11 @@
 
 import os
+import signal
 import sys
+import threading
+
+# Prevent matplotlib from trying to write to non-writable directories
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/eyedoc_mpl")
 
 # Ensure backend directory is in sys.path
 backend_dir = os.path.dirname(os.path.abspath(__file__))
@@ -21,34 +26,42 @@ WINDOW_HEIGHT = 270
 
 def get_resource_path(relative_path):
     """Resolve resource paths for development and PyInstaller builds."""
+    search_dirs = []
 
-    # 1. PyInstaller onefile mode
+    # 1. PyInstaller _MEIPASS (onefile or onedir runtime dir)
     if hasattr(sys, "_MEIPASS"):
-        p = os.path.join(sys._MEIPASS, relative_path)
-        if os.path.exists(p):
-            return p
+        search_dirs.append(sys._MEIPASS)
 
-    # 2. Alongside executable (onedir mode)
+    # 2. Alongside executable (onedir mode, Contents/MacOS)
     exe_dir = os.path.dirname(os.path.abspath(sys.executable))
-    p = os.path.join(exe_dir, relative_path)
-    if os.path.exists(p):
-        return p
+    search_dirs.append(exe_dir)
 
-    # 3. macOS app bundle Resources
-    p = os.path.join(exe_dir, "..", "Resources", relative_path)
-    if os.path.exists(p):
-        return os.path.abspath(p)
+    # 3. macOS app bundle Resources (Contents/Resources)
+    search_dirs.append(os.path.abspath(os.path.join(exe_dir, "..", "Resources")))
 
-    # 4. Development mode
-    root_dir = os.path.dirname(
-        os.path.dirname(os.path.abspath(__file__))
-    )
-    p = os.path.join(root_dir, relative_path)
+    # 4. macOS app bundle Frameworks (Contents/Frameworks)
+    search_dirs.append(os.path.abspath(os.path.join(exe_dir, "..", "Frameworks")))
 
-    if os.path.exists(p):
-        return p
+    # 5. Project root (parent of backend/) and backend/
+    root_dir = os.path.dirname(backend_dir)
+    search_dirs.append(root_dir)
+    search_dirs.append(backend_dir)
 
-    return p
+    # 6. Current working directory
+    search_dirs.append(os.path.abspath("."))
+
+    # Variants of relative path to try (e.g. with/without 'backend/' prefix)
+    rel_variants = [relative_path]
+    if relative_path.startswith("backend/"):
+        rel_variants.append(relative_path[len("backend/"):])
+
+    for base in search_dirs:
+        for rel in rel_variants:
+            candidate = os.path.join(base, rel)
+            if os.path.exists(candidate):
+                return os.path.abspath(candidate)
+
+    return os.path.abspath(relative_path)
 
 
 class DesktopApi:
@@ -157,10 +170,17 @@ def main():
     # --------------------------------------------------
     # Initialize blink counter using the SAME camera
     # --------------------------------------------------
+    model_path = get_resource_path("backend/models/face_landmarker.task")
+    print(
+        f"[App] Face Landmarker model: {model_path} "
+        f"(exists={os.path.exists(model_path)})"
+    )
+
     blink_server = BlinkCounterServer(
         camera_service=camera_service,
         warning_threshold=12,
         interval_seconds=60,
+        model_path=model_path,
     )
     blink_port = blink_server.start()
 
@@ -183,6 +203,7 @@ def main():
     }
 
     tray_manager = None
+    is_quitting = False
 
     # --------------------------------------------------
     # Window and application lifecycle
@@ -225,28 +246,46 @@ def main():
             window_state["visible"] = False
 
     def on_quit_app():
+        nonlocal is_quitting
+        if is_quitting:
+            return
+        is_quitting = True
         print("[App] Shutting down...")
 
-        # Stop blink processing before stopping the camera.
-        try:
-            blink_server.stop()
-        except Exception as exc:
-            print(f"[App] Blink server shutdown error: {exc}")
-
-        try:
-            camera_service.stop()
-        except Exception as exc:
-            print(f"[App] Camera shutdown error: {exc}")
-
-        w = window_state["window"]
-
-        if w:
+        def _cleanup():
+            # Stop blink processing before stopping the camera
             try:
-                w.destroy()
-            except Exception:
-                pass
+                blink_server.stop()
+            except Exception as exc:
+                print(f"[App] Blink server shutdown error: {exc}")
 
-        sys.exit(0)
+            try:
+                camera_service.stop()
+            except Exception as exc:
+                print(f"[App] Camera shutdown error: {exc}")
+
+            w = window_state.get("window")
+            if w:
+                try:
+                    w.destroy()
+                except Exception:
+                    pass
+
+            if sys.platform == "darwin":
+                try:
+                    from AppKit import NSApp
+                    from PyObjCTools import AppHelper
+
+                    AppHelper.callAfter(lambda: NSApp.terminate_(None))
+                except Exception:
+                    pass
+
+            # Safe exit after brief delay to allow threads and sockets to close
+            import time
+            time.sleep(0.3)
+            os._exit(0)
+
+        threading.Thread(target=_cleanup, name="ShutdownThread", daemon=True).start()
 
     tray_manager = SystemTrayManager(
         on_toggle=on_toggle_tray,
@@ -327,11 +366,23 @@ def main():
     window_state["window"] = window
 
     def on_window_closing():
+        if is_quitting:
+            return True
         # Closing hides the window rather than exiting the app.
         on_hide_window()
         return False
 
     window.events.closing += on_window_closing
+
+    # Clean signal handling
+    def _sig_handler(sig, frame):
+        on_quit_app()
+
+    try:
+        signal.signal(signal.SIGINT, _sig_handler)
+        signal.signal(signal.SIGTERM, _sig_handler)
+    except Exception:
+        pass
 
     def on_gui_ready():
         if sys.platform == "darwin":

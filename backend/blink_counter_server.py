@@ -32,6 +32,7 @@ LEFT_EYE_INDICES = (33, 160, 158, 133, 153, 144)
 RIGHT_EYE_INDICES = (362, 385, 387, 263, 373, 380)
 
 
+
 class BlinkCounterServer:
     def __init__(
         self,
@@ -92,9 +93,9 @@ class BlinkCounterServer:
             return self.port
 
         if not self.model_path.is_file():
-            raise FileNotFoundError(
-                f"Face Landmarker model not found: {self.model_path}\n"
-                "Download face_landmarker.task into backend/models/."
+            err_msg = (
+                f"Face Landmarker model not found at: {self.model_path}\n"
+                "Please ensure face_landmarker.task exists and is included in the build."
             )
 
         self._stop_event.clear()
@@ -130,9 +131,6 @@ class BlinkCounterServer:
         """Stop processing and the HTTP server."""
         self._stop_event.set()
 
-        if self._processing_thread and self._processing_thread.is_alive():
-            self._processing_thread.join(timeout=3)
-
         server = self._http_server
         if server is not None:
             try:
@@ -140,8 +138,11 @@ class BlinkCounterServer:
             except Exception:
                 pass
 
+        if self._processing_thread and self._processing_thread.is_alive():
+            self._processing_thread.join(timeout=1.0)
+
         if self._server_thread and self._server_thread.is_alive():
-            self._server_thread.join(timeout=2)
+            self._server_thread.join(timeout=1.0)
 
         self._started = False
 
@@ -272,7 +273,8 @@ class BlinkCounterServer:
                             b"Content-Length: " + str(len(frame)).encode() + b"\r\n\r\n"
                             + frame + b"\r\n"
                         )
-                    time.sleep(0.03)
+                    if self._stop_event.wait(0.03):
+                        break
 
             return HTTPResponse(
                 body=generate(),
@@ -360,9 +362,12 @@ class BlinkCounterServer:
                     self._check_interval()
                 except Exception as exc:
                     self._set_error(f"Frame processing error: {exc}")
-                    self._stop_event.wait(0.1)
+                    if self._stop_event.wait(0.1):
+                        break
         except Exception as exc:
-            self._set_error(f"Could not initialize MediaPipe Face Landmarker: {exc}")
+            err_msg = f"Could not initialize MediaPipe Face Landmarker: {exc}"
+            print(f"[BlinkCounter] {err_msg}")
+            self._set_error(err_msg)
         finally:
             if landmarker is not None:
                 try:
