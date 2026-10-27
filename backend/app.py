@@ -138,6 +138,12 @@ class DesktopApi:
         """Reset lifetime and current interval counters."""
         return self._blink_server.reset_counts()
 
+    def test_notification(self):
+        """Trigger a test blink warning notification."""
+        if hasattr(self, "_blink_server") and self._blink_server:
+            return self._blink_server.trigger_test_warning()
+        return {"error": "Blink server not initialized"}
+
     def hide_window(self):
         self.hide_fn()
         return {"status": "hidden"}

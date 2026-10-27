@@ -15,6 +15,7 @@ a = Analysis(
         'camera',
         'stream_server',
         'blink_counter_server',
+        'notifications',
         'tray',
         'cv2',
         'numpy',

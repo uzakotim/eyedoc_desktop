@@ -24,6 +24,15 @@ from bottle import Bottle, HTTPResponse, response
 from cheroot.wsgi import Server as WSGIServer
 import socket
 
+try:
+    from notifications import send_mac_notification
+except ImportError:
+    try:
+        from backend.notifications import send_mac_notification
+    except ImportError:
+        def send_mac_notification(message="Blink!", title="EyeDoc", **kwargs):
+            pass
+
 
 # MediaPipe Face Mesh landmark indices used to calculate eye aspect ratio (EAR).
 # Order: outer corner, upper outer, upper inner, inner corner, lower inner,
@@ -44,6 +53,8 @@ class BlinkCounterServer:
         ear_threshold: float = 0.21,
         min_closed_frames: int = 2,
         model_path: Optional[str] = None,
+        notify_on_warning: bool = True,
+        on_warning: Optional[Any] = None,
     ):
         self.camera_service = camera_service
         self.host = host
@@ -52,6 +63,8 @@ class BlinkCounterServer:
         self.interval_seconds = int(interval_seconds)
         self.ear_threshold = float(ear_threshold)
         self.min_closed_frames = max(1, int(min_closed_frames))
+        self.notify_on_warning = bool(notify_on_warning)
+        self.on_warning = on_warning
 
         self.model_path = Path(model_path) if model_path else (
             Path(__file__).resolve().parent / "models" / "face_landmarker.task"
@@ -231,6 +244,12 @@ class BlinkCounterServer:
             if self._is_options():
                 return ""
             return self.reset_counts()
+
+        @self.app.route("/notify_test", method=["GET", "POST", "OPTIONS"])
+        def notify_test_route():
+            if self._is_options():
+                return ""
+            return self.trigger_test_warning()
 
         @self.app.route("/snapshot.jpg", method=["GET", "OPTIONS"])
         @self.app.route("/frame", method=["GET", "OPTIONS"])
@@ -529,6 +548,33 @@ class BlinkCounterServer:
             intervals_elapsed = max(1, int(elapsed // self.interval_seconds))
             self.interval_start_time += intervals_elapsed * self.interval_seconds
             self.interval_blink_count = 0
+            warning_triggered = self.last_interval_warning
+
+        if warning_triggered:
+            self._trigger_warning(interval_count)
+
+    def _trigger_warning(self, count: int) -> None:
+        print(
+            f"[BlinkCounter] Blink warning triggered: {count} blinks in interval "
+            f"(threshold: {self.warning_threshold})"
+        )
+        if self.notify_on_warning:
+            send_mac_notification(message="Blink!", title="EyeDoc")
+
+        if self.on_warning:
+            try:
+                self.on_warning(count, self.warning_threshold)
+            except Exception as exc:
+                print(f"[BlinkCounter] on_warning callback error: {exc}")
+
+    def trigger_test_warning(self) -> dict[str, Any]:
+        """Manually trigger a warning notification for testing."""
+        self._trigger_warning(0)
+        return {
+            "status": "warning_triggered",
+            "message": "Blink!",
+            "threshold": self.warning_threshold,
+        }
 
     def _set_error(self, message: str) -> None:
         with self._lock:
