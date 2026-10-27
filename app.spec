@@ -44,6 +44,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='./AppIcon.appiconset/appstore1024.png'
 )
 
 coll = COLLECT(
@@ -59,7 +60,7 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name='EyeDoc.app',
-    icon=None,
+    icon='./AppIcon.appiconset/mac1024.png',
     bundle_identifier='com.eyedoc.desktop',
     info_plist={
         'CFBundleName': 'EyeDoc',
@@ -68,8 +69,6 @@ app = BUNDLE(
         'CFBundleShortVersionString': '1.0.0',
         'CFBundleIdentifier': 'com.eyedoc.desktop',
         'NSCameraUsageDescription': 'EyeDoc uses the camera to display your front camera feed in the menu bar.',
-        # LSUIElement = True: tray/menu-bar agent app.
-        # Prevents "app appears stuck" when launched from Finder without a visible window.
         'LSUIElement': True,
         'LSMultipleInstancesProhibited': True,
         'NSHighResolutionCapable': True,
