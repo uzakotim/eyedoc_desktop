@@ -186,17 +186,43 @@ class MacGameOverlay:
 
                 content.addSubview_(effect_view)
 
-                # Icon: Eye emoji
-                icon_field = AppKit.NSTextField.alloc().initWithFrame_(
-                    AppKit.NSMakeRect(18, 18, 40, 40)
+                # Icon: eye.fill SF Symbol matching the app icon
+                img = AppKit.NSImage.imageWithSystemSymbolName_accessibilityDescription_(
+                    "eye.fill", "EyeDoc"
                 )
-                icon_field.setEditable_(False)
-                icon_field.setSelectable_(False)
-                icon_field.setBezeled_(False)
-                icon_field.setDrawsBackground_(False)
-                icon_field.setStringValue_("👁")
-                icon_field.setFont_(AppKit.NSFont.systemFontOfSize_(28))
-                effect_view.addSubview_(icon_field)
+                if img:
+                    try:
+                        config = AppKit.NSImageSymbolConfiguration.configurationWithPointSize_weight_(
+                            26, AppKit.NSFontWeightSemibold
+                        )
+                        if config:
+                            img = img.imageWithSymbolConfiguration_(config)
+                    except Exception:
+                        pass
+
+                    icon_view = AppKit.NSImageView.alloc().initWithFrame_(
+                        AppKit.NSMakeRect(18, (h - 38) / 2.0, 38, 38)
+                    )
+                    icon_view.setImage_(img)
+                    icon_view.setImageScaling_(AppKit.NSImageScaleProportionallyUpOrDown)
+                    icon_view.setContentTintColor_(
+                        AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                            0.35, 0.85, 1.0, 1.0
+                        )
+                    )
+                    effect_view.addSubview_(icon_view)
+                else:
+                    # Fallback if SF Symbols are not available
+                    icon_field = AppKit.NSTextField.alloc().initWithFrame_(
+                        AppKit.NSMakeRect(18, (h - 38) / 2.0, 38, 38)
+                    )
+                    icon_field.setEditable_(False)
+                    icon_field.setSelectable_(False)
+                    icon_field.setBezeled_(False)
+                    icon_field.setDrawsBackground_(False)
+                    icon_field.setStringValue_("👁")
+                    icon_field.setFont_(AppKit.NSFont.systemFontOfSize_(26))
+                    effect_view.addSubview_(icon_field)
 
                 # Title text
                 title_field = AppKit.NSTextField.alloc().initWithFrame_(
@@ -328,51 +354,14 @@ def send_mac_notification(
     sound: bool = True,
     duration: float = 3.8,
 ) -> bool:
-    """Send notification that displays even while playing a full-screen game.
-
-    1. Displays a high-priority in-game HUD overlay directly on top of
-       fullscreen games and spaces.
-    2. Plays an audible notification sound.
-    3. Concurrently posts a native macOS notification center banner.
-    """
+    """Send on-screen HUD overlay notification with the eye icon."""
     if sys.platform != "darwin":
         return False
 
-    overlay_shown = False
-    try:
-        overlay_shown = show_game_overlay(
-            message=message,
-            title=title,
-            subtitle=subtitle,
-            duration=duration,
-            sound=sound,
-        )
-    except Exception as exc:
-        print(f"[Notifications] Overlay failed: {exc}")
-
-    # Concurrently send standard macOS Notification Center notification
-    try:
-        safe_message = message.replace("\\", "\\\\").replace('"', '\\"')
-        safe_title = title.replace("\\", "\\\\").replace('"', '\\"')
-
-        cmd_parts = [f'display notification "{safe_message}"']
-        if safe_title:
-            cmd_parts.append(f'with title "{safe_title}"')
-        if subtitle:
-            safe_subtitle = subtitle.replace("\\", "\\\\").replace('"', '\\"')
-            cmd_parts.append(f'subtitle "{safe_subtitle}"')
-        # Only add sound to osascript if overlay didn't already play sound
-        if sound and not overlay_shown:
-            cmd_parts.append('sound name "default"')
-
-        script = " ".join(cmd_parts)
-
-        subprocess.Popen(
-            ["/usr/bin/osascript", "-e", script],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        return True
-    except Exception as exc:
-        print(f"[Notifications] Error sending macOS notification: {exc}")
-        return overlay_shown
+    return show_game_overlay(
+        message=message,
+        title=title,
+        subtitle=subtitle,
+        duration=duration,
+        sound=sound,
+    )
