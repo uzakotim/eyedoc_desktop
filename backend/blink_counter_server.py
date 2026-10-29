@@ -25,12 +25,14 @@ from cheroot.wsgi import Server as WSGIServer
 import socket
 
 try:
-    from notifications import send_mac_notification
+    from notifications import send_mac_notification, show_game_overlay
 except ImportError:
     try:
-        from backend.notifications import send_mac_notification
+        from backend.notifications import send_mac_notification, show_game_overlay
     except ImportError:
         def send_mac_notification(message="Blink!", title="EyeDoc", **kwargs):
+            pass
+        def show_game_overlay(*args, **kwargs):
             pass
 
 
@@ -559,7 +561,15 @@ class BlinkCounterServer:
             f"(threshold: {self.warning_threshold})"
         )
         if self.notify_on_warning:
-            send_mac_notification(message="Blink!", title="EyeDoc")
+            if count == 0:
+                sub = "Take a moment to rest and blink your eyes."
+            else:
+                sub = f"Only {count} blinks in the last minute (target: {self.warning_threshold})."
+            send_mac_notification(
+                message="Blink!",
+                title="EyeDoc",
+                subtitle=sub,
+            )
 
         if self.on_warning:
             try:

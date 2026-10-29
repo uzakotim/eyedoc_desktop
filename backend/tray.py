@@ -19,9 +19,10 @@ def create_default_tray_image():
     return image
 
 class SystemTrayManager:
-    def __init__(self, on_toggle, on_quit):
+    def __init__(self, on_toggle, on_quit, on_test_notification=None):
         self.on_toggle = on_toggle
         self.on_quit = on_quit
+        self.on_test_notification = on_test_notification
         self.status_item = None
         self.pystray_icon = None
         self._button_rect = None
@@ -109,6 +110,11 @@ class SystemTrayManager:
                         self.manager.on_toggle()
 
                 @objc.IBAction
+                def onMenuTestNotification_(self, sender):
+                    if self.manager.on_test_notification:
+                        self.manager.on_test_notification()
+
+                @objc.IBAction
                 def onMenuQuit_(self, sender):
                     if self.manager.on_quit:
                         self.manager.on_quit()
@@ -139,6 +145,10 @@ class SystemTrayManager:
             item_toggle = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("Toggle Camera Window", "onMenuToggle:", "t")
             item_toggle.setTarget_(self.handler)
             menu.addItem_(item_toggle)
+
+            item_test = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("Test Blink Notification", "onMenuTestNotification:", "b")
+            item_test.setTarget_(self.handler)
+            menu.addItem_(item_test)
 
             menu.addItem_(NSMenuItem.separatorItem())
 

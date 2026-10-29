@@ -18,6 +18,7 @@ from camera import CameraService
 from stream_server import StreamServer
 from blink_counter_server import BlinkCounterServer
 from tray import SystemTrayManager
+from notifications import cleanup_notifications
 
 
 WINDOW_WIDTH = 360
@@ -266,6 +267,11 @@ def main():
                 print(f"[App] Blink server shutdown error: {exc}")
 
             try:
+                cleanup_notifications()
+            except Exception as exc:
+                print(f"[App] Notification cleanup error: {exc}")
+
+            try:
                 camera_service.stop()
             except Exception as exc:
                 print(f"[App] Camera shutdown error: {exc}")
@@ -296,6 +302,7 @@ def main():
     tray_manager = SystemTrayManager(
         on_toggle=on_toggle_tray,
         on_quit=on_quit_app,
+        on_test_notification=lambda: blink_server.trigger_test_warning(),
     )
 
     # --------------------------------------------------
@@ -393,13 +400,32 @@ def main():
     def on_gui_ready():
         if sys.platform == "darwin":
             try:
-                from AppKit import NSApp
+                from AppKit import (
+                    NSApp,
+                    NSWindowCollectionBehaviorCanJoinAllSpaces,
+                    NSWindowCollectionBehaviorFullScreenAuxiliary,
+                    NSWindowCollectionBehaviorStationary,
+                )
                 from PyObjCTools import AppHelper
 
-                AppHelper.callAfter(tray_manager.setup_tray)
-                AppHelper.callAfter(
-                    lambda: NSApp.activateIgnoringOtherApps_(True)
-                )
+                def _init_macos_gui():
+                    tray_manager.setup_tray()
+                    NSApp.activateIgnoringOtherApps_(True)
+
+                    # Allow app windows to coexist with full-screen games and spaces
+                    for win in NSApp.windows():
+                        try:
+                            behavior = win.collectionBehavior()
+                            win.setCollectionBehavior_(
+                                behavior
+                                | NSWindowCollectionBehaviorCanJoinAllSpaces
+                                | NSWindowCollectionBehaviorFullScreenAuxiliary
+                                | NSWindowCollectionBehaviorStationary
+                            )
+                        except Exception:
+                            pass
+
+                AppHelper.callAfter(_init_macos_gui)
             except Exception as exc:
                 print(
                     "[App] Failed to initialize macOS tray "
