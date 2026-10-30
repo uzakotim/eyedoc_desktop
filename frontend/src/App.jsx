@@ -25,6 +25,8 @@ export default function App() {
     interval_blink_count: 0,
     last_interval_warning: false,
     last_interval_count: null,
+    distance: null,
+    distance_warning: false,
   })
 
   // Poll blink counter status every second
@@ -428,15 +430,15 @@ export default function App() {
           <div className="absolute left-2 bottom-2 z-10 flex flex-col gap-1 pointer-events-none">
             <div className="rounded-lg border border-white/15 bg-slate-950/85 backdrop-blur-md px-3 py-2 shadow-lg">
               <div className="text-[9px] uppercase tracking-wider text-white/50">
-                Total blinks
+                This minute
               </div>
 
               <div className="text-2xl leading-tight font-bold text-white tabular-nums">
-                {blinkStatus.blink_count ?? 0}
+                {blinkStatus.interval_blink_count ?? 0}
               </div>
 
               <div className="mt-1 text-[10px] text-indigo-300">
-                This minute: {blinkStatus.interval_blink_count ?? 0}
+                Total blinks: {blinkStatus.blink_count ?? 0}
               </div>
             </div>
 

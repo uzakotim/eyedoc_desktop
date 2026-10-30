@@ -12,6 +12,7 @@ The server reuses CameraService.get_jpeg(); it does not open a second camera.
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 from pathlib import Path
@@ -25,12 +26,22 @@ from cheroot.wsgi import Server as WSGIServer
 import socket
 
 try:
-    from notifications import send_mac_notification, show_game_overlay
+    from notifications import (
+        send_mac_notification,
+        send_distance_notification,
+        show_game_overlay,
+    )
 except ImportError:
     try:
-        from backend.notifications import send_mac_notification, show_game_overlay
+        from backend.notifications import (
+            send_mac_notification,
+            send_distance_notification,
+            show_game_overlay,
+        )
     except ImportError:
         def send_mac_notification(message="Blink!", title="EyeDoc", **kwargs):
+            pass
+        def send_distance_notification(message="Move head farther from the screen", title="EyeDoc", **kwargs):
             pass
         def show_game_overlay(*args, **kwargs):
             pass
@@ -54,6 +65,7 @@ class BlinkCounterServer:
         interval_seconds: int = 60,
         ear_threshold: float = 0.21,
         min_closed_frames: int = 2,
+        depth_threshold: float = 0.4,
         model_path: Optional[str] = None,
         notify_on_warning: bool = True,
         on_warning: Optional[Any] = None,
@@ -65,6 +77,7 @@ class BlinkCounterServer:
         self.interval_seconds = int(interval_seconds)
         self.ear_threshold = float(ear_threshold)
         self.min_closed_frames = max(1, int(min_closed_frames))
+        self.depth_threshold = float(depth_threshold)
         self.notify_on_warning = bool(notify_on_warning)
         self.on_warning = on_warning
 
@@ -94,6 +107,14 @@ class BlinkCounterServer:
         self._last_frame_time = 0.0
         self._last_error: Optional[str] = None
         self._face_detected = False
+
+        # Distance estimation state (depth to eyes)
+        self._last_distance: Optional[float] = None
+        self._too_close_frames = 0
+        self._distance_warning_active = False
+        self._last_distance_warning_time = 0.0
+        self.distance_warning_cooldown = 10.0  # seconds between warnings
+        self.distance_consecutive_frames = 5   # consecutive frames < 0.4m before alert
 
         self.app = Bottle()
         self._register_routes()
@@ -182,6 +203,13 @@ class BlinkCounterServer:
                     if self._last_ear is not None
                     else None
                 ),
+                "distance": (
+                    round(self._last_distance, 2)
+                    if self._last_distance is not None
+                    else None
+                ),
+                "distance_warning": self._distance_warning_active,
+                "depth_threshold": self.depth_threshold,
                 "error": self._last_error,
             }
 
@@ -196,6 +224,9 @@ class BlinkCounterServer:
             self.closed_frames = 0
             self.eye_closed = False
             self._last_ear = None
+            self._last_distance = None
+            self._too_close_frames = 0
+            self._distance_warning_active = False
         return {
             "reset": True,
             "blink_count": 0,
@@ -204,6 +235,8 @@ class BlinkCounterServer:
             "current_minute_blinks": 0,
             "last_interval_count": None,
             "last_interval_warning": False,
+            "distance": None,
+            "distance_warning": False,
         }
 
     def get_latest_jpeg(self) -> Optional[bytes]:
@@ -252,6 +285,12 @@ class BlinkCounterServer:
             if self._is_options():
                 return ""
             return self.trigger_test_warning()
+
+        @self.app.route("/distance_notify_test", method=["GET", "POST", "OPTIONS"])
+        def distance_notify_test_route():
+            if self._is_options():
+                return ""
+            return self.trigger_test_distance_warning()
 
         @self.app.route("/snapshot.jpg", method=["GET", "OPTIONS"])
         @self.app.route("/frame", method=["GET", "OPTIONS"])
@@ -420,25 +459,53 @@ class BlinkCounterServer:
 
             self._update_blink_state(ear)
 
+            # Calculate distance from camera to eyes based on face_landmarks and mediapipe
+            raw_distance = self._calculate_eye_distance(landmarks, width, height)
+            distance = self._update_distance_state(raw_distance)
+
             with self._lock:
                 self._last_ear = ear
 
-            self._draw_eye_landmarks(frame, landmarks, width, height)
+            is_too_close = distance is not None and distance < self.depth_threshold
+            self._draw_eye_landmarks(frame, landmarks, width, height, is_too_close=is_too_close)
+
             cv2.putText(
                 frame,
                 f"EAR: {ear:.2f}",
-                (10, height - 42),
+                (10, height - 38),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.55,
+                0.52,
                 (80, 220, 255),
+                2,
+                cv2.LINE_AA,
+            )
+
+            # Distance display (red warning when < 0.4 meters)
+            if distance is not None:
+                dist_color = (60, 60, 255) if is_too_close else (100, 255, 160)
+                dist_label = f"Dist: {distance:.2f}m" + (" (TOO CLOSE)" if is_too_close else "")
+            else:
+                dist_color = (180, 180, 180)
+                dist_label = "Dist: --"
+
+            cv2.putText(
+                frame,
+                dist_label,
+                (10, height - 16),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.52,
+                dist_color,
                 2,
                 cv2.LINE_AA,
             )
         else:
             with self._lock:
                 self._last_ear = None
+                self._last_distance = None
                 self.closed_frames = 0
                 self.eye_closed = False
+                self._too_close_frames = 0
+                self._distance_warning_active = False
             cv2.putText(
                 frame,
                 "Face not detected",
@@ -488,7 +555,8 @@ class BlinkCounterServer:
                 self.eye_closed = False
 
     @staticmethod
-    def _draw_eye_landmarks(frame, landmarks, width: int, height: int) -> None:
+    def _draw_eye_landmarks(frame, landmarks, width: int, height: int, is_too_close: bool = False) -> None:
+        color = (60, 60, 255) if is_too_close else (70, 255, 120)
         for indices in (LEFT_EYE_INDICES, RIGHT_EYE_INDICES):
             points = []
             for idx in indices:
@@ -497,16 +565,127 @@ class BlinkCounterServer:
                     int(landmarks[idx].y * height),
                 )
                 points.append(point)
-                cv2.circle(frame, point, 2, (70, 255, 120), -1, cv2.LINE_AA)
+                cv2.circle(frame, point, 2, color, -1, cv2.LINE_AA)
             if len(points) >= 4:
                 cv2.polylines(
                     frame,
                     [np.array(points, dtype=np.int32)],
                     isClosed=True,
-                    color=(70, 255, 120),
+                    color=color,
                     thickness=1,
                     lineType=cv2.LINE_AA,
                 )
+
+    @staticmethod
+    def _calculate_eye_distance(landmarks, width: int, height: int) -> Optional[float]:
+        """Calculate metric distance (in meters) from camera to eyes using face landmarks.
+
+        Uses pinhole camera model with anthropometric human eye measurements:
+        - Interpupillary distance (IPD) between eye centroids: ~63 mm (0.063 m)
+        - Outer eye corners distance (exocanthion 33 to 263): ~96 mm (0.096 m)
+        - Standard webcam horizontal FOV: ~65 degrees
+        3D landmark coordinates (x, y, z) account for head yaw and pitch.
+        """
+        try:
+            # Centroid of left eye
+            lx = sum(landmarks[i].x for i in LEFT_EYE_INDICES) / len(LEFT_EYE_INDICES)
+            ly = sum(landmarks[i].y for i in LEFT_EYE_INDICES) / len(LEFT_EYE_INDICES)
+            lz = sum(landmarks[i].z for i in LEFT_EYE_INDICES) / len(LEFT_EYE_INDICES)
+
+            # Centroid of right eye
+            rx = sum(landmarks[i].x for i in RIGHT_EYE_INDICES) / len(RIGHT_EYE_INDICES)
+            ry = sum(landmarks[i].y for i in RIGHT_EYE_INDICES) / len(RIGHT_EYE_INDICES)
+            rz = sum(landmarks[i].z for i in RIGHT_EYE_INDICES) / len(RIGHT_EYE_INDICES)
+
+            # 3D Euclidean distance between eye centroids in pixels
+            dx = (rx - lx) * width
+            dy = (ry - ly) * height
+            dz = (rz - lz) * width
+            d_eyes_px = math.sqrt(dx * dx + dy * dy + dz * dz)
+
+            # 3D Euclidean distance between outer eye corners (33 and 263)
+            dx_out = (landmarks[263].x - landmarks[33].x) * width
+            dy_out = (landmarks[263].y - landmarks[33].y) * height
+            dz_out = (landmarks[263].z - landmarks[33].z) * width
+            d_outer_px = math.sqrt(dx_out * dx_out + dy_out * dy_out + dz_out * dz_out)
+
+            # Camera focal length in pixels for ~65 deg HFOV webcam
+            # fx = (width / 2) / tan(32.5 deg) ~= 0.7848 * width
+            fx = width / (2.0 * math.tan(math.radians(32.5)))
+
+            estimates = []
+            if d_eyes_px > 1e-4:
+                estimates.append((fx * 0.063) / d_eyes_px)
+            if d_outer_px > 1e-4:
+                estimates.append((fx * 0.096) / d_outer_px)
+
+            if not estimates:
+                return None
+
+            return float(sum(estimates) / len(estimates))
+        except Exception:
+            return None
+
+    def _update_distance_state(self, raw_distance: Optional[float]) -> Optional[float]:
+        if raw_distance is None:
+            return None
+
+        # Clamp raw depth reading to reasonable desk bounds (0.1m - 3.0m)
+        clamped = max(0.1, min(3.0, raw_distance))
+
+        trigger_warning = False
+        with self._lock:
+            if self._last_distance is None:
+                smooth_dist = clamped
+            else:
+                # Exponential moving average filter
+                smooth_dist = 0.25 * clamped + 0.75 * self._last_distance
+            self._last_distance = smooth_dist
+
+            now = time.monotonic()
+            if smooth_dist < self.depth_threshold:
+                self._too_close_frames += 1
+                if self._too_close_frames >= self.distance_consecutive_frames:
+                    self._distance_warning_active = True
+                    if (now - self._last_distance_warning_time) >= self.distance_warning_cooldown:
+                        self._last_distance_warning_time = now
+                        trigger_warning = True
+            else:
+                # Hysteresis buffer of 4cm to reset active alert state
+                if smooth_dist >= (self.depth_threshold + 0.04):
+                    self._too_close_frames = 0
+                    self._distance_warning_active = False
+
+        if trigger_warning:
+            self._trigger_distance_warning(smooth_dist)
+
+        return smooth_dist
+
+    def _trigger_distance_warning(self, distance: Optional[float] = None) -> None:
+        dist_str = f"{distance:.2f}m" if distance is not None else "< 0.4m"
+        print(
+            f"[BlinkCounter] Distance warning triggered: depth is {dist_str} "
+            f"(threshold: {self.depth_threshold}m)"
+        )
+        if self.notify_on_warning:
+            send_distance_notification(
+                message="Move head farther",
+                title="EyeDoc",
+                subtitle=f"{dist_str} from the screen ,maintain at least 0.4m.",
+                duration=3.8,
+                sound=True,
+                sound_name="Glass",
+            )
+
+    def trigger_test_distance_warning(self) -> dict[str, Any]:
+        """Manually trigger a distance warning notification for testing."""
+        self._trigger_distance_warning(0.35)
+        return {
+            "status": "distance_warning_triggered",
+            "message": "Move head farther from the screen",
+            "distance": 0.35,
+            "threshold": self.depth_threshold,
+        }
 
     def _draw_counter_overlay(self, frame: np.ndarray) -> None:
         with self._lock:

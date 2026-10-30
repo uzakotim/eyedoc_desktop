@@ -36,6 +36,8 @@ class MacGameOverlay:
         self._hide_timer: Optional[threading.Timer] = None
         self._title_field: Optional[AppKit.NSTextField] = None
         self._subtitle_field: Optional[AppKit.NSTextField] = None
+        self._effect_view: Optional[AppKit.NSVisualEffectView] = None
+        self._icon_view: Optional[AppKit.NSImageView] = None
         self._lock = threading.Lock()
 
     def is_available(self) -> bool:
@@ -48,6 +50,8 @@ class MacGameOverlay:
         subtitle: str = "",
         duration: float = 3.8,
         sound: bool = True,
+        color: str = "default",
+        sound_name: Optional[str] = None,
     ) -> bool:
         if not self.is_available():
             return False
@@ -60,14 +64,17 @@ class MacGameOverlay:
                 subtitle,
                 float(duration),
                 bool(sound),
+                str(color),
+                sound_name,
             )
             return True
 
         return False
 
-    def _play_sound(self) -> None:
+    def _play_sound(self, sound_name: Optional[str] = None) -> None:
+        name = sound_name or "Ping"
         try:
-            sound = AppKit.NSSound.soundNamed_("Ping")
+            sound = AppKit.NSSound.soundNamed_(name)
             if sound:
                 sound.play()
                 return
@@ -77,7 +84,7 @@ class MacGameOverlay:
         # Fallback to system afplay
         try:
             subprocess.Popen(
-                ["/usr/bin/afplay", "/System/Library/Sounds/Ping.aiff"],
+                ["/usr/bin/afplay", f"/System/Library/Sounds/{name}.aiff"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
@@ -91,25 +98,65 @@ class MacGameOverlay:
         subtitle: str,
         duration: float,
         sound: bool,
+        color: str = "default",
+        sound_name: Optional[str] = None,
     ) -> None:
         with self._lock:
             if self._hide_timer:
                 self._hide_timer.cancel()
                 self._hide_timer = None
 
+            is_red = (color == "red")
+
             if sound:
-                self._play_sound()
+                chosen_sound = sound_name or ("Glass" if is_red else "Ping")
+                self._play_sound(chosen_sound)
 
             main_text = message
-            sub_text = subtitle or "Give your eyes a moment to rest and blink."
+            sub_text = subtitle or ("Move head farther from the screen." if is_red else "Give your eyes a moment to rest and blink.")
 
-            # If panel is already active, refresh its content and pulse visibility
+            if is_red:
+                # Glowing warning red colors
+                border_color = AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                    1.0, 0.28, 0.28, 0.88
+                ).CGColor()
+                bg_color = AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                    0.16, 0.04, 0.06, 0.95
+                ).CGColor()
+                icon_color = AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                    1.0, 0.35, 0.35, 1.0
+                )
+                sub_color = AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                    1.0, 0.82, 0.85, 0.95
+                )
+            else:
+                # Subtle glowing cyan / turquoise colors
+                border_color = AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                    0.3, 0.85, 0.95, 0.6
+                ).CGColor()
+                bg_color = AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                    0.06, 0.08, 0.14, 0.94
+                ).CGColor()
+                icon_color = AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                    0.35, 0.85, 1.0, 1.0
+                )
+                sub_color = AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                    0.75, 0.88, 1.0, 0.95
+                )
+
+            # If panel is already active, refresh its content, style, and pulse visibility
             if self._panel is not None:
                 try:
                     if self._title_field:
                         self._title_field.setStringValue_(f"{title} • {main_text}")
                     if self._subtitle_field:
                         self._subtitle_field.setStringValue_(sub_text)
+                        self._subtitle_field.setTextColor_(sub_color)
+                    if self._effect_view and self._effect_view.layer():
+                        self._effect_view.layer().setBorderColor_(border_color)
+                        self._effect_view.layer().setBackgroundColor_(bg_color)
+                    if self._icon_view:
+                        self._icon_view.setContentTintColor_(icon_color)
 
                     self._panel.setAlphaValue_(1.0)
                     self._panel.orderFrontRegardless()
@@ -171,20 +218,11 @@ class MacGameOverlay:
                 layer.setCornerRadius_(22.0)
                 layer.setMasksToBounds_(True)
                 layer.setBorderWidth_(1.5)
-                # Subtle glowing cyan / turquoise border
-                layer.setBorderColor_(
-                    AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
-                        0.3, 0.85, 0.95, 0.6
-                    ).CGColor()
-                )
-                # Dark translucent glass tint
-                layer.setBackgroundColor_(
-                    AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
-                        0.06, 0.08, 0.14, 0.94
-                    ).CGColor()
-                )
+                layer.setBorderColor_(border_color)
+                layer.setBackgroundColor_(bg_color)
 
                 content.addSubview_(effect_view)
+                self._effect_view = effect_view
 
                 # Icon: eye.fill SF Symbol matching the app icon
                 img = AppKit.NSImage.imageWithSystemSymbolName_accessibilityDescription_(
@@ -205,12 +243,9 @@ class MacGameOverlay:
                     )
                     icon_view.setImage_(img)
                     icon_view.setImageScaling_(AppKit.NSImageScaleProportionallyUpOrDown)
-                    icon_view.setContentTintColor_(
-                        AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
-                            0.35, 0.85, 1.0, 1.0
-                        )
-                    )
+                    icon_view.setContentTintColor_(icon_color)
                     effect_view.addSubview_(icon_view)
+                    self._icon_view = icon_view
                 else:
                     # Fallback if SF Symbols are not available
                     icon_field = AppKit.NSTextField.alloc().initWithFrame_(
@@ -248,11 +283,7 @@ class MacGameOverlay:
                 subtitle_field.setDrawsBackground_(False)
                 subtitle_field.setStringValue_(sub_text)
                 subtitle_field.setFont_(AppKit.NSFont.systemFontOfSize_(12))
-                subtitle_field.setTextColor_(
-                    AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
-                        0.75, 0.88, 1.0, 0.95
-                    )
-                )
+                subtitle_field.setTextColor_(sub_color)
                 effect_view.addSubview_(subtitle_field)
                 self._subtitle_field = subtitle_field
 
@@ -312,6 +343,8 @@ class MacGameOverlay:
             self._panel = None
         self._title_field = None
         self._subtitle_field = None
+        self._effect_view = None
+        self._icon_view = None
 
     def close(self) -> None:
         with self._lock:
@@ -331,6 +364,8 @@ def show_game_overlay(
     subtitle: str = "",
     duration: float = 3.8,
     sound: bool = True,
+    color: str = "default",
+    sound_name: Optional[str] = None,
 ) -> bool:
     """Display an on-screen HUD overlay notification visible even during games."""
     return _overlay_manager.show(
@@ -339,6 +374,8 @@ def show_game_overlay(
         subtitle=subtitle,
         duration=duration,
         sound=sound,
+        color=color,
+        sound_name=sound_name,
     )
 
 
@@ -353,6 +390,8 @@ def send_mac_notification(
     subtitle: str = "",
     sound: bool = True,
     duration: float = 3.8,
+    color: str = "default",
+    sound_name: Optional[str] = None,
 ) -> bool:
     """Send on-screen HUD overlay notification with the eye icon."""
     if sys.platform != "darwin":
@@ -364,4 +403,26 @@ def send_mac_notification(
         subtitle=subtitle,
         duration=duration,
         sound=sound,
+        color=color,
+        sound_name=sound_name,
+    )
+
+
+def send_distance_notification(
+    message: str = "Move head farther",
+    title: str = "EyeDoc",
+    subtitle: str = "Your eyes are closer than 0.4m from the screen.",
+    sound: bool = True,
+    duration: float = 3.8,
+    sound_name: str = "Glass",
+) -> bool:
+    """Send distance warning HUD overlay notification in red with an alert sound."""
+    return send_mac_notification(
+        message=message,
+        title=title,
+        subtitle=subtitle,
+        sound=sound,
+        duration=duration,
+        color="red",
+        sound_name=sound_name,
     )

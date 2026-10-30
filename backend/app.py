@@ -108,6 +108,9 @@ class DesktopApi:
             "blink_reset_url": (
                 f"http://127.0.0.1:{self.blink_port}/reset"
             ),
+            "blink_distance_test_url": (
+                f"http://127.0.0.1:{self.blink_port}/distance_notify_test"
+            ),
 
             "platform": sys.platform,
             "width": WINDOW_WIDTH,
@@ -143,6 +146,12 @@ class DesktopApi:
         """Trigger a test blink warning notification."""
         if hasattr(self, "_blink_server") and self._blink_server:
             return self._blink_server.trigger_test_warning()
+        return {"error": "Blink server not initialized"}
+
+    def test_distance_notification(self):
+        """Trigger a test distance warning notification."""
+        if hasattr(self, "_blink_server") and self._blink_server:
+            return self._blink_server.trigger_test_distance_warning()
         return {"error": "Blink server not initialized"}
 
     def hide_window(self):
