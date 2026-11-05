@@ -30,6 +30,7 @@ try:
         send_mac_notification,
         send_distance_notification,
         show_game_overlay,
+        cleanup_notifications,
     )
 except ImportError:
     try:
@@ -37,6 +38,7 @@ except ImportError:
             send_mac_notification,
             send_distance_notification,
             show_game_overlay,
+            cleanup_notifications,
         )
     except ImportError:
         def send_mac_notification(message="Blink!", title="EyeDoc", **kwargs):
@@ -44,6 +46,8 @@ except ImportError:
         def send_distance_notification(message="Move head farther from the screen", title="EyeDoc", **kwargs):
             pass
         def show_game_overlay(*args, **kwargs):
+            pass
+        def cleanup_notifications():
             pass
 
 
@@ -69,6 +73,7 @@ class BlinkCounterServer:
         model_path: Optional[str] = None,
         notify_on_warning: bool = True,
         on_warning: Optional[Any] = None,
+        face_disappearance_timeout: float = 2.0,
     ):
         self.camera_service = camera_service
         self.host = host
@@ -80,6 +85,7 @@ class BlinkCounterServer:
         self.depth_threshold = float(depth_threshold)
         self.notify_on_warning = bool(notify_on_warning)
         self.on_warning = on_warning
+        self.face_disappearance_timeout = float(face_disappearance_timeout)
 
         self.model_path = Path(model_path) if model_path else (
             Path(__file__).resolve().parent / "models" / "face_landmarker.task"
@@ -98,6 +104,9 @@ class BlinkCounterServer:
         self.last_interval_warning = False
         self.last_interval_end: Optional[float] = None
         self.interval_start_time = time.monotonic()
+        self._interval_active_seconds = 0.0
+        self._last_active_time: Optional[float] = None
+        self._last_face_seen_time: Optional[float] = None
 
         self.closed_frames = 0
         self.eye_closed = False
@@ -166,6 +175,8 @@ class BlinkCounterServer:
     def stop(self) -> None:
         """Stop processing and the HTTP server."""
         self._stop_event.set()
+        with self._lock:
+            self._handle_face_disappeared()
 
         server = self._http_server
         if server is not None:
@@ -184,15 +195,17 @@ class BlinkCounterServer:
 
     def get_status(self) -> dict[str, Any]:
         with self._lock:
-            elapsed = max(0.0, time.monotonic() - self.interval_start_time)
-            remaining = max(0.0, self.interval_seconds - elapsed)
+            if self._face_detected:
+                remaining = max(0.0, self.interval_seconds - self._interval_active_seconds)
+            else:
+                remaining = float(self.interval_seconds)
             return {
                 "blink_count": self.blink_count,
                 "total_blinks": self.blink_count,
                 "interval_blink_count": self.interval_blink_count,
                 "current_minute_blinks": self.interval_blink_count,
                 "last_interval_count": self.last_interval_count,
-                "last_interval_warning": self.last_interval_warning,
+                "last_interval_warning": self.last_interval_warning if self._face_detected else False,
                 "last_interval_end": self.last_interval_end,
                 "warning_threshold": self.warning_threshold,
                 "interval_seconds": self.interval_seconds,
@@ -208,7 +221,7 @@ class BlinkCounterServer:
                     if self._last_distance is not None
                     else None
                 ),
-                "distance_warning": self._distance_warning_active,
+                "distance_warning": self._distance_warning_active if self._face_detected else False,
                 "depth_threshold": self.depth_threshold,
                 "error": self._last_error,
             }
@@ -221,6 +234,8 @@ class BlinkCounterServer:
             self.last_interval_warning = False
             self.last_interval_end = None
             self.interval_start_time = time.monotonic()
+            self._interval_active_seconds = 0.0
+            self._last_active_time = time.monotonic() if self._face_detected else None
             self.closed_frames = 0
             self.eye_closed = False
             self._last_ear = None
@@ -238,6 +253,28 @@ class BlinkCounterServer:
             "distance": None,
             "distance_warning": False,
         }
+
+    def _handle_face_disappeared(self) -> None:
+        """Invoked when face disappears. Stops counting and clears notifications."""
+        if not self._face_detected:
+            return
+        print("[BlinkCounter] Face disappeared: stopping blink counting and notifications.")
+        self._face_detected = False
+        self._last_face_seen_time = None
+        self._last_active_time = None
+        self._interval_active_seconds = 0.0
+        self.interval_blink_count = 0
+        self.last_interval_warning = False
+        self.closed_frames = 0
+        self.eye_closed = False
+        self._too_close_frames = 0
+        self._distance_warning_active = False
+        self._last_ear = None
+        self._last_distance = None
+        try:
+            cleanup_notifications()
+        except Exception:
+            pass
 
     def get_latest_jpeg(self) -> Optional[bytes]:
         with self._lock:
@@ -387,6 +424,10 @@ class BlinkCounterServer:
                     source_jpeg = self.camera_service.get_jpeg()
                     if not source_jpeg:
                         self._set_error("Camera has not supplied a frame yet")
+                        with self._lock:
+                            if self._face_detected and self._last_face_seen_time is not None:
+                                if (time.monotonic() - self._last_face_seen_time) >= self.face_disappearance_timeout:
+                                    self._handle_face_disappeared()
                         self._stop_event.wait(0.05)
                         continue
 
@@ -448,11 +489,25 @@ class BlinkCounterServer:
         results = landmarker.detect_for_video(mp_image, timestamp_ms)
         height, width = frame.shape[:2]
         landmarks = results.face_landmarks[0] if results.face_landmarks else None
-
-        with self._lock:
-            self._face_detected = landmarks is not None
+        now = time.monotonic()
 
         if landmarks:
+            with self._lock:
+                if not self._face_detected:
+                    self._face_detected = True
+                    self._interval_active_seconds = 0.0
+                    self.interval_blink_count = 0
+                    self.last_interval_warning = False
+                    self._last_active_time = now
+                    self._last_face_seen_time = now
+                else:
+                    if self._last_active_time is not None:
+                        dt = now - self._last_active_time
+                        if 0.0 < dt < self.face_disappearance_timeout:
+                            self._interval_active_seconds += dt
+                    self._last_active_time = now
+                    self._last_face_seen_time = now
+
             left_ear = self._calculate_ear(landmarks, LEFT_EYE_INDICES, width, height)
             right_ear = self._calculate_ear(landmarks, RIGHT_EYE_INDICES, width, height)
             ear = (left_ear + right_ear) / 2.0
@@ -506,6 +561,17 @@ class BlinkCounterServer:
                 self.eye_closed = False
                 self._too_close_frames = 0
                 self._distance_warning_active = False
+                self._last_active_time = None
+
+                if self._face_detected:
+                    time_since_seen = (
+                        (now - self._last_face_seen_time)
+                        if self._last_face_seen_time is not None
+                        else float("inf")
+                    )
+                    if time_since_seen >= self.face_disappearance_timeout:
+                        self._handle_face_disappeared()
+
             cv2.putText(
                 frame,
                 "Face not detected",
@@ -543,6 +609,11 @@ class BlinkCounterServer:
 
     def _update_blink_state(self, ear: float) -> None:
         with self._lock:
+            if not self._face_detected:
+                self.closed_frames = 0
+                self.eye_closed = False
+                return
+
             if ear < self.ear_threshold:
                 self.closed_frames += 1
                 if self.closed_frames >= self.min_closed_frames:
@@ -662,12 +733,18 @@ class BlinkCounterServer:
         return smooth_dist
 
     def _trigger_distance_warning(self, distance: Optional[float] = None) -> None:
+        with self._lock:
+            if not self._face_detected:
+                return
+            notify = self.notify_on_warning
+            depth_thresh = self.depth_threshold
+
         dist_str = f"{distance:.2f}m" if distance is not None else "< 0.4m"
         print(
             f"[BlinkCounter] Distance warning triggered: depth is {dist_str} "
-            f"(threshold: {self.depth_threshold}m)"
+            f"(threshold: {depth_thresh}m)"
         )
-        if self.notify_on_warning:
+        if notify:
             send_distance_notification(
                 message="Move head farther",
                 title="EyeDoc",
@@ -679,7 +756,15 @@ class BlinkCounterServer:
 
     def trigger_test_distance_warning(self) -> dict[str, Any]:
         """Manually trigger a distance warning notification for testing."""
-        self._trigger_distance_warning(0.35)
+        if self.notify_on_warning:
+            send_distance_notification(
+                message="Move head farther",
+                title="EyeDoc",
+                subtitle="0.35m from the screen ,maintain at least 0.4m.",
+                duration=3.8,
+                sound=True,
+                sound_name="Glass",
+            )
         return {
             "status": "distance_warning_triggered",
             "message": "Move head farther from the screen",
@@ -692,6 +777,7 @@ class BlinkCounterServer:
             total = self.blink_count
             interval_count = self.interval_blink_count
             warning = self.last_interval_warning
+            face_detected = self._face_detected
 
         height, width = frame.shape[:2]
         box_width = min(250, max(180, width - 20))
@@ -708,57 +794,75 @@ class BlinkCounterServer:
             frame, f"Total blinks: {total}", (x1 + 10, y1 + 27),
             cv2.FONT_HERSHEY_SIMPLEX, 0.62, (255, 255, 255), 2, cv2.LINE_AA
         )
-        cv2.putText(
-            frame, f"This interval: {interval_count}", (x1 + 10, y1 + 53),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.52, color, 2, cv2.LINE_AA
-        )
+        if face_detected:
+            cv2.putText(
+                frame, f"This interval: {interval_count}", (x1 + 10, y1 + 53),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.52, color, 2, cv2.LINE_AA
+            )
+        else:
+            cv2.putText(
+                frame, "Waiting for face...", (x1 + 10, y1 + 53),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.50, (160, 160, 160), 1, cv2.LINE_AA
+            )
 
     def _check_interval(self) -> None:
-        now = time.monotonic()
+        warning_to_trigger = None
         with self._lock:
-            elapsed = now - self.interval_start_time
-            if elapsed < self.interval_seconds:
+            if not self._face_detected:
                 return
 
-            # If processing was delayed for multiple intervals, close the current
-            # measured interval and advance the start to the latest interval edge.
+            if self._interval_active_seconds < self.interval_seconds:
+                return
+
             interval_count = self.interval_blink_count
             self.last_interval_count = interval_count
             self.last_interval_warning = interval_count < self.warning_threshold
             self.last_interval_end = time.time()
-            intervals_elapsed = max(1, int(elapsed // self.interval_seconds))
-            self.interval_start_time += intervals_elapsed * self.interval_seconds
+            self._interval_active_seconds = 0.0
             self.interval_blink_count = 0
-            warning_triggered = self.last_interval_warning
+            if self.last_interval_warning:
+                warning_to_trigger = interval_count
 
-        if warning_triggered:
-            self._trigger_warning(interval_count)
+        if warning_to_trigger is not None:
+            self._trigger_warning(warning_to_trigger)
 
     def _trigger_warning(self, count: int) -> None:
+        with self._lock:
+            if not self._face_detected:
+                return
+            warning_threshold = self.warning_threshold
+            notify = self.notify_on_warning
+            callback = self.on_warning
+
         print(
             f"[BlinkCounter] Blink warning triggered: {count} blinks in interval "
-            f"(threshold: {self.warning_threshold})"
+            f"(threshold: {warning_threshold})"
         )
-        if self.notify_on_warning:
+        if notify:
             if count == 0:
                 sub = "Take a moment to rest and blink your eyes."
             else:
-                sub = f"Only {count} blinks in the last minute (target: {self.warning_threshold})."
+                sub = f"Only {count} blinks in the last minute (target: {warning_threshold})."
             send_mac_notification(
                 message="Blink!",
                 title="EyeDoc",
                 subtitle=sub,
             )
 
-        if self.on_warning:
+        if callback:
             try:
-                self.on_warning(count, self.warning_threshold)
+                callback(count, warning_threshold)
             except Exception as exc:
                 print(f"[BlinkCounter] on_warning callback error: {exc}")
 
     def trigger_test_warning(self) -> dict[str, Any]:
         """Manually trigger a warning notification for testing."""
-        self._trigger_warning(0)
+        if self.notify_on_warning:
+            send_mac_notification(
+                message="Blink!",
+                title="EyeDoc",
+                subtitle="Test notification: blink counter warning.",
+            )
         return {
             "status": "warning_triggered",
             "message": "Blink!",

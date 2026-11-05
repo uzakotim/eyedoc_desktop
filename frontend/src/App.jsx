@@ -27,6 +27,7 @@ export default function App() {
     last_interval_count: null,
     distance: null,
     distance_warning: false,
+    face_detected: false,
   })
 
   // Poll blink counter status every second
@@ -429,12 +430,17 @@ export default function App() {
           {/* Blink Counter Overlay */}
           <div className="absolute left-2 bottom-2 z-10 flex flex-col gap-1 pointer-events-none">
             <div className="rounded-lg border border-white/15 bg-slate-950/85 backdrop-blur-md px-3 py-2 shadow-lg">
-              <div className="text-[9px] uppercase tracking-wider text-white/50">
-                This minute
+              <div className="text-[9px] uppercase tracking-wider text-white/50 flex items-center justify-between gap-2">
+                <span>This minute</span>
+                {!blinkStatus.face_detected && (
+                  <span className="text-[8px] font-normal text-amber-400/90 bg-amber-400/15 px-1 py-0.5 rounded leading-none">
+                    No face
+                  </span>
+                )}
               </div>
 
               <div className="text-2xl leading-tight font-bold text-white tabular-nums">
-                {blinkStatus.interval_blink_count ?? 0}
+                {blinkStatus.face_detected ? (blinkStatus.interval_blink_count ?? 0) : '—'}
               </div>
 
               <div className="mt-1 text-[10px] text-indigo-300">
@@ -442,7 +448,7 @@ export default function App() {
               </div>
             </div>
 
-            {blinkStatus.last_interval_warning && (
+            {blinkStatus.face_detected && blinkStatus.last_interval_warning && (
               <div className="rounded-md bg-amber-950/90 border border-amber-400/30 px-2 py-1 text-[10px] font-medium text-amber-300">
                 Low blink rate — take a break
               </div>

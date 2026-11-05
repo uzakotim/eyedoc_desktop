@@ -351,7 +351,10 @@ class MacGameOverlay:
             if self._hide_timer:
                 self._hide_timer.cancel()
                 self._hide_timer = None
-            self._cleanup_panel()
+            if AppHelper is not None:
+                AppHelper.callAfter(self._cleanup_panel)
+            else:
+                self._cleanup_panel()
 
 
 # Global overlay singleton
