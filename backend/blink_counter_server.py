@@ -85,6 +85,7 @@ class BlinkCounterServer:
         self.depth_threshold = float(depth_threshold)
         self.notify_on_warning = bool(notify_on_warning)
         self.on_warning = on_warning
+        self.on_blink: Optional[Any] = None
         self.face_disappearance_timeout = float(face_disappearance_timeout)
 
         self.model_path = Path(model_path) if model_path else (
@@ -192,6 +193,10 @@ class BlinkCounterServer:
             self._server_thread.join(timeout=1.0)
 
         self._started = False
+
+    def set_blink_callback(self, callback: Optional[Any]) -> None:
+        """Register a callback invoked immediately when a blink occurs."""
+        self.on_blink = callback
 
     def get_status(self) -> dict[str, Any]:
         with self._lock:
@@ -622,6 +627,11 @@ class BlinkCounterServer:
                 if self.eye_closed:
                     self.blink_count += 1
                     self.interval_blink_count += 1
+                    if self.on_blink:
+                        try:
+                            self.on_blink(self.interval_blink_count)
+                        except Exception:
+                            pass
                 self.closed_frames = 0
                 self.eye_closed = False
 

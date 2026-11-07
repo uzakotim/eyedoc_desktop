@@ -16,6 +16,7 @@ a = Analysis(
         'stream_server',
         'blink_counter_server',
         'notifications',
+        'minimal_view',
         'tray',
         'cv2',
         'numpy',
@@ -79,8 +80,8 @@ app = BUNDLE(
     info_plist={
         'CFBundleName': 'EyeDoc',
         'CFBundleDisplayName': 'EyeDoc',
-        'CFBundleVersion': '1.0.0',
-        'CFBundleShortVersionString': '1.0.0',
+        'CFBundleVersion': '1.0.1',
+        'CFBundleShortVersionString': '1.0.1',
         'CFBundleIdentifier': 'com.eyedoc.desktop',
         'NSCameraUsageDescription': 'EyeDoc requires camera access for the live preview and blink counter.',
         'LSUIElement': True,

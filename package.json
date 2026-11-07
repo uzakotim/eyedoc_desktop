@@ -1,7 +1,7 @@
 {
   "name": "eyedoc_desktop",
-  "version": "1.0.0",
-  "description": "",
+  "version": "1.0.1",
+  "description": "Blinks counter",
   "main": "index.js",
   "scripts": {
     "dev:frontend": "cd frontend && yarn run dev",

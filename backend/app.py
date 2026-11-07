@@ -19,6 +19,7 @@ from stream_server import StreamServer
 from blink_counter_server import BlinkCounterServer
 from tray import SystemTrayManager
 from notifications import cleanup_notifications
+from minimal_view import MinimalCircleOverlay
 
 
 WINDOW_WIDTH = 360
@@ -115,6 +116,11 @@ class DesktopApi:
             "platform": sys.platform,
             "width": WINDOW_WIDTH,
             "height": WINDOW_HEIGHT,
+            "minimal_view_visible": (
+                self._minimal_overlay.is_visible()
+                if hasattr(self, "_minimal_overlay") and self._minimal_overlay
+                else False
+            ),
         }
 
     def get_camera_status(self):
@@ -136,7 +142,22 @@ class DesktopApi:
 
     def get_blink_status(self):
         """Get blink statistics directly through the PyWebView API."""
-        return self._blink_server.get_status()
+        status = self._blink_server.get_status()
+        if hasattr(self, "_minimal_overlay") and self._minimal_overlay:
+            status["minimal_view_visible"] = self._minimal_overlay.is_visible()
+        return status
+
+    def toggle_minimal_view(self):
+        """Toggle the floating minimal circle view."""
+        if hasattr(self, "_minimal_overlay") and self._minimal_overlay:
+            return self._minimal_overlay.toggle()
+        return {"visible": False, "error": "Minimal overlay not initialized"}
+
+    def get_minimal_view_status(self):
+        """Get visibility status of the minimal circle view."""
+        if hasattr(self, "_minimal_overlay") and self._minimal_overlay:
+            return {"visible": self._minimal_overlay.is_visible()}
+        return {"visible": False}
 
     def reset_blink_count(self):
         """Reset lifetime and current interval counters."""
@@ -164,6 +185,9 @@ class DesktopApi:
 
     def set_blink_server(self, blink_server):
         self._blink_server = blink_server
+
+    def set_minimal_overlay(self, minimal_overlay):
+        self._minimal_overlay = minimal_overlay
 
 
 def main():
@@ -218,6 +242,7 @@ def main():
         "window": None,
     }
 
+    minimal_overlay = None
     tray_manager = None
     is_quitting = False
 
@@ -275,6 +300,12 @@ def main():
             except Exception as exc:
                 print(f"[App] Blink server shutdown error: {exc}")
 
+            if minimal_overlay is not None:
+                try:
+                    minimal_overlay.close()
+                except Exception as exc:
+                    print(f"[App] Minimal overlay cleanup error: {exc}")
+
             try:
                 cleanup_notifications()
             except Exception as exc:
@@ -308,10 +339,17 @@ def main():
 
         threading.Thread(target=_cleanup, name="ShutdownThread", daemon=True).start()
 
+    minimal_overlay = MinimalCircleOverlay(
+        blink_server=blink_server,
+        on_open_main_app=on_toggle_tray,
+    )
+    blink_server.set_blink_callback(minimal_overlay.on_blink)
+
     tray_manager = SystemTrayManager(
         on_toggle=on_toggle_tray,
         on_quit=on_quit_app,
         on_test_notification=lambda: blink_server.trigger_test_warning(),
+        on_toggle_minimal=minimal_overlay.toggle,
     )
 
     # --------------------------------------------------
@@ -327,6 +365,7 @@ def main():
     )
 
     api.set_blink_server(blink_server)
+    api.set_minimal_overlay(minimal_overlay)
 
     # --------------------------------------------------
     # Detect Vite development server

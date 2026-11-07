@@ -19,6 +19,7 @@ export default function App() {
 
   const [isRetrying, setIsRetrying] = useState(false)
   const [showControls, setShowControls] = useState(false)
+  const [isMinimalViewActive, setIsMinimalViewActive] = useState(false)
   const prevBlobUrlRef = useRef(null)
   const [blinkStatus, setBlinkStatus] = useState({
     blink_count: 0,
@@ -44,6 +45,9 @@ export default function App() {
               ...prev,
               ...result,
             }))
+            if (typeof result.minimal_view_visible === 'boolean') {
+              setIsMinimalViewActive(result.minimal_view_visible)
+            }
           }
         }
       } catch (err) {
@@ -68,6 +72,9 @@ export default function App() {
           const config = await window.pywebview.api.get_config()
           if (config?.stream_port) {
             setStreamPort(String(config.stream_port))
+          }
+          if (typeof config?.minimal_view_visible === 'boolean') {
+            setIsMinimalViewActive(config.minimal_view_visible)
           }
         } catch (e) {
           console.warn('[EyeDoc] Could not fetch pywebview config:', e)
@@ -232,6 +239,24 @@ export default function App() {
     }
   }
 
+  const handleToggleMinimalView = async (e) => {
+    e.stopPropagation()
+    if (window.pywebview?.api?.toggle_minimal_view) {
+      try {
+        const res = await window.pywebview.api.toggle_minimal_view()
+        if (res && typeof res.visible === 'boolean') {
+          setIsMinimalViewActive(res.visible)
+        } else {
+          setIsMinimalViewActive((prev) => !prev)
+        }
+      } catch (err) {
+        console.error('Toggle minimal view error:', err)
+      }
+    } else {
+      setIsMinimalViewActive((prev) => !prev)
+    }
+  }
+
   return (
     <div
       className="w-full h-full flex flex-col p-1.5 select-none font-sans"
@@ -338,6 +363,29 @@ export default function App() {
                   <path d="M21.5 16.5V9a2 2 0 0 0-2-2h-2.5l-.83-1" />
                 </svg>
               )}
+            </button>
+
+            {/* Minimal Circle View Trigger Button */}
+            <button
+              onClick={handleToggleMinimalView}
+              title={isMinimalViewActive ? 'Hide Minimal View (Floating Circle)' : 'Open Minimal View (Floating Circle)'}
+              className={`p-1 rounded-md text-xs transition-all ${isMinimalViewActive
+                ? 'text-cyan-300 bg-cyan-500/20 border border-cyan-400/40 shadow-[0_0_8px_rgba(56,189,248,0.35)]'
+                : 'text-white/50 hover:text-cyan-300 hover:bg-white/10 border border-transparent'
+                }`}
+            >
+              <svg
+                className="w-3.5 h-3.5"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <circle cx="12" cy="12" r="9" />
+                <circle cx="12" cy="12" r="2.5" fill="currentColor" />
+              </svg>
             </button>
 
             {/* Test Notification (Game Overlay) */}
