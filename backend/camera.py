@@ -6,7 +6,7 @@ import threading
 import time
 
 class CameraService:
-    def __init__(self, camera_index=0):
+    def __init__(self, camera_index=0, target_fps=5,target_width=160, target_height=120):
         self.camera_index = camera_index
         self.cap = None
         self.is_running = True
@@ -18,7 +18,11 @@ class CameraService:
         self.error_message = None
         self.fps = 0.0
         self.anim_step = 0
-        self.resolution = (640, 480)
+        self.resolution = (320, 240)
+        self.target_fps = target_fps
+        self.frame_interval = 1.0 / target_fps
+        self.target_width = target_width
+        self.target_height = target_height
 
         # Start background capture thread
         self.thread = threading.Thread(target=self._capture_loop, daemon=True)
@@ -41,12 +45,16 @@ class CameraService:
                 cap = cv2.VideoCapture(self.camera_index)
 
             if cap.isOpened():
+                # Request target FPS from the camera hardware/driver
+                cap.set(cv2.CAP_PROP_FPS, self.target_fps)
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.target_width)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.target_height)
                 # Read a few warmup frames so auto-exposure engages properly
                 for _ in range(3):
                     cap.read()
 
-                w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 640)
-                h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 480)
+                w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or self.target_width)
+                h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or self.target_height)
                 self.resolution = (w, h)
                 return cap
             else:
@@ -123,13 +131,20 @@ class CameraService:
                 continue
 
             if self.connected and self.cap is not None:
+                loop_start_time = time.time()  # Track when frame processing started
+
                 ret, frame = self.cap.read()
                 if ret and frame is not None:
-                    # Downscale to max 640px wide for efficiency while preserving aspect ratio
+                    # --- CONVERT TO BLACK AND WHITE (GRAYSCALE) ---
+                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                    # Downscale to max target_width x target_height for efficiency while preserving aspect ratio
                     h, w = frame.shape[:2]
-                    if w > 640:
-                        new_h = int(h * (640 / w))
-                        frame = cv2.resize(frame, (640, new_h), interpolation=cv2.INTER_AREA)
+                    if w > self.target_width:
+                        new_h = int(h * (self.target_width / w))
+                        frame = cv2.resize(frame, (self.target_width, new_h), interpolation=cv2.INTER_AREA)
+                    elif h > self.target_height:
+                        new_w = int(w * (self.target_height / h))
+                        frame = cv2.resize(frame, (new_w, self.target_height), interpolation=cv2.INTER_AREA)
 
                     # Apply mirror mode if enabled (standard for front webcams)
                     if self.mirror:
@@ -148,8 +163,11 @@ class CameraService:
                         fps_count = 0
                         last_time = now
 
-                    # Sleep briefly to cap at ~30 FPS
-                    time.sleep(0.015)
+                    # --- ENFORCE TARGET FPS SLEEP ---
+                    elapsed = time.time() - loop_start_time
+                    sleep_time = self.frame_interval - elapsed
+                    if sleep_time > 0:
+                        time.sleep(sleep_time)
                     continue
                 else:
                     # Frame read failure
@@ -183,7 +201,7 @@ class CameraService:
                 b'Content-Length: ' + str(len(jpeg)).encode('ascii') + b'\r\n\r\n'
                 + jpeg + b'\r\n'
             )
-            time.sleep(0.033)
+            time.sleep(1.0 / self.target_fps)
 
     def toggle_mirror(self):
         self.mirror = not self.mirror
