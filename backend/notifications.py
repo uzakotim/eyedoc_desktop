@@ -414,7 +414,7 @@ def send_mac_notification(
 def send_distance_notification(
     message: str = "Move head farther",
     title: str = "EyeDoc",
-    subtitle: str = "Your eyes are closer than 0.4m from the screen.",
+    subtitle: str = "Your eyes are closer than 0.3m from the screen.",
     sound: bool = True,
     duration: float = 3.8,
     sound_name: str = "Glass",

@@ -69,7 +69,7 @@ class BlinkCounterServer:
         interval_seconds: int = 60,
         ear_threshold: float = 0.21,
         min_closed_frames: int = 2,
-        depth_threshold: float = 0.4,
+        depth_threshold: float = 0.3,
         model_path: Optional[str] = None,
         notify_on_warning: bool = True,
         on_warning: Optional[Any] = None,
@@ -749,7 +749,7 @@ class BlinkCounterServer:
             notify = self.notify_on_warning
             depth_thresh = self.depth_threshold
 
-        dist_str = f"{distance:.2f}m" if distance is not None else "< 0.4m"
+        dist_str = f"{distance:.2f}m" if distance is not None else "< 0.3m"
         print(
             f"[BlinkCounter] Distance warning triggered: depth is {dist_str} "
             f"(threshold: {depth_thresh}m)"
@@ -758,7 +758,7 @@ class BlinkCounterServer:
             send_distance_notification(
                 message="Move head farther",
                 title="EyeDoc",
-                subtitle=f"{dist_str} from the screen ,maintain at least 0.4m.",
+                subtitle=f"{dist_str} from the screen ,maintain at least 0.3m.",
                 duration=3.8,
                 sound=True,
                 sound_name="Glass",
@@ -770,7 +770,7 @@ class BlinkCounterServer:
             send_distance_notification(
                 message="Move head farther",
                 title="EyeDoc",
-                subtitle="0.35m from the screen ,maintain at least 0.4m.",
+                subtitle="0.35m from the screen ,maintain at least 0.3m.",
                 duration=3.8,
                 sound=True,
                 sound_name="Glass",
