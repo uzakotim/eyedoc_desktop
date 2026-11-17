@@ -6,7 +6,7 @@ import threading
 import time
 
 class CameraService:
-    def __init__(self, camera_index=0, target_fps=5,target_width=160, target_height=120):
+    def __init__(self, camera_index=0, target_fps=15,target_width=320, target_height=240):
         self.camera_index = camera_index
         self.cap = None
         self.is_running = True
