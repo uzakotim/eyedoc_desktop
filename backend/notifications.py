@@ -1,9 +1,10 @@
 """
-macOS Notification helper for EyeDoc.
+Cross-platform notification helper for EyeDoc.
 
-Provides in-game HUD overlay notifications that display on top of fullscreen
-games and spaces without interrupting gameplay or stealing focus, combined
-with audio chimes and native system notifications.
+macOS  – NSPanel HUD overlay (AppKit / PyObjC) that floats above full-screen
+         games without stealing focus.
+Windows – winotify toast notifications with a sound fallback via winsound.
+         The overlay class degrades gracefully on Windows (no-op).
 """
 
 from __future__ import annotations
@@ -13,6 +14,9 @@ import sys
 import threading
 from typing import Optional
 
+# ---------------------------------------------------------------------------
+# macOS imports (graceful degradation on Windows)
+# ---------------------------------------------------------------------------
 try:
     import AppKit
     import Quartz
@@ -23,6 +27,68 @@ except ImportError:
     AppHelper = None
 
 
+# ---------------------------------------------------------------------------
+# Windows imports (graceful degradation on macOS)
+# ---------------------------------------------------------------------------
+def _play_windows_sound(sound_name: str = "default") -> None:
+    """Play a Windows system sound via winsound (no extra deps)."""
+    if sys.platform != "win32":
+        return
+    try:
+        import winsound
+        # Map sound names to Windows built-ins
+        mapping = {
+            "Glass": winsound.MB_ICONERROR,
+            "Ping": winsound.MB_ICONASTERISK,
+            "default": winsound.MB_ICONASTERISK,
+        }
+        flags = mapping.get(sound_name, winsound.MB_ICONASTERISK)
+        # MB_ constants are for MessageBeep – use Beep or alias to MB flags
+        winsound.MessageBeep(flags)
+    except Exception:
+        pass
+
+
+def _send_windows_toast(
+    title: str,
+    message: str,
+    sound: bool = True,
+    sound_name: str = "default",
+) -> bool:
+    """Send a Windows toast notification via winotify."""
+    try:
+        from winotify import Notification, audio
+
+        toast = Notification(
+            app_id="EyeDoc",
+            title=title,
+            msg=message,
+            duration="short",
+        )
+        if sound:
+            # winotify has a small set of named audio constants
+            audio_map = {
+                "Glass": audio.Default,
+                "Ping": audio.IM,
+                "default": audio.Default,
+            }
+            toast.set_audio(audio_map.get(sound_name, audio.Default), loop=False)
+        else:
+            toast.set_audio(audio.Silent, loop=False)
+        toast.show()
+        return True
+    except Exception as exc:
+        print(f"[Notifications] Windows toast error: {exc}")
+        # Last-resort: winsound beep so user gets some feedback
+        if sound:
+            _play_windows_sound(sound_name)
+        return False
+
+
+# ---------------------------------------------------------------------------
+# macOS HUD overlay
+# ---------------------------------------------------------------------------
+
 class MacGameOverlay:
     """Manages an on-screen HUD overlay notification window on macOS.
 
@@ -32,12 +98,12 @@ class MacGameOverlay:
     """
 
     def __init__(self) -> None:
-        self._panel: Optional[AppKit.NSPanel] = None
+        self._panel: Optional[AppKit.NSPanel] = None if AppKit else None
         self._hide_timer: Optional[threading.Timer] = None
-        self._title_field: Optional[AppKit.NSTextField] = None
-        self._subtitle_field: Optional[AppKit.NSTextField] = None
-        self._effect_view: Optional[AppKit.NSVisualEffectView] = None
-        self._icon_view: Optional[AppKit.NSImageView] = None
+        self._title_field = None
+        self._subtitle_field = None
+        self._effect_view = None
+        self._icon_view = None
         self._lock = threading.Lock()
 
     def is_available(self) -> bool:
@@ -116,7 +182,6 @@ class MacGameOverlay:
             sub_text = subtitle or ("Move head farther from the screen." if is_red else "Give your eyes a moment to rest and blink.")
 
             if is_red:
-                # Glowing warning red colors
                 border_color = AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
                     1.0, 0.28, 0.28, 0.88
                 ).CGColor()
@@ -130,7 +195,6 @@ class MacGameOverlay:
                     1.0, 0.82, 0.85, 0.95
                 )
             else:
-                # Subtle glowing cyan / turquoise colors
                 border_color = AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
                     0.3, 0.85, 0.95, 0.6
                 ).CGColor()
@@ -144,7 +208,6 @@ class MacGameOverlay:
                     0.75, 0.88, 1.0, 0.95
                 )
 
-            # If panel is already active, refresh its content, style, and pulse visibility
             if self._panel is not None:
                 try:
                     if self._title_field:
@@ -165,7 +228,6 @@ class MacGameOverlay:
                 except Exception:
                     self._cleanup_panel()
 
-            # Construct new HUD overlay panel
             try:
                 screen = AppKit.NSScreen.mainScreen()
                 s_frame = screen.frame() if screen else AppKit.NSMakeRect(0, 0, 1440, 900)
@@ -173,7 +235,6 @@ class MacGameOverlay:
                 w = 400.0
                 h = 76.0
                 x = s_frame.origin.x + (s_frame.size.width - w) / 2.0
-                # 44px below top edge of screen
                 y = s_frame.origin.y + s_frame.size.height - h - 44.0
 
                 frame = AppKit.NSMakeRect(x, y, w, h)
@@ -185,7 +246,6 @@ class MacGameOverlay:
                     False,
                 )
 
-                # Shielding window level guarantees visibility above full-screen games
                 panel.setLevel_(Quartz.CGShieldingWindowLevel())
                 panel.setCollectionBehavior_(
                     AppKit.NSWindowCollectionBehaviorCanJoinAllSpaces
@@ -196,14 +256,12 @@ class MacGameOverlay:
                 panel.setOpaque_(False)
                 panel.setBackgroundColor_(AppKit.NSColor.clearColor())
                 panel.setHasShadow_(True)
-                # Ignore mouse events so user can click through during gaming
                 panel.setIgnoresMouseEvents_(True)
                 panel.setHidesOnDeactivate_(False)
 
                 content = panel.contentView()
                 content.setWantsLayer_(True)
 
-                # Frosted glass background
                 effect_view = AppKit.NSVisualEffectView.alloc().initWithFrame_(
                     AppKit.NSMakeRect(0, 0, w, h)
                 )
@@ -224,7 +282,6 @@ class MacGameOverlay:
                 content.addSubview_(effect_view)
                 self._effect_view = effect_view
 
-                # Icon: eye.fill SF Symbol matching the app icon
                 img = AppKit.NSImage.imageWithSystemSymbolName_accessibilityDescription_(
                     "eye.fill", "EyeDoc"
                 )
@@ -247,7 +304,6 @@ class MacGameOverlay:
                     effect_view.addSubview_(icon_view)
                     self._icon_view = icon_view
                 else:
-                    # Fallback if SF Symbols are not available
                     icon_field = AppKit.NSTextField.alloc().initWithFrame_(
                         AppKit.NSMakeRect(18, (h - 38) / 2.0, 38, 38)
                     )
@@ -259,7 +315,6 @@ class MacGameOverlay:
                     icon_field.setFont_(AppKit.NSFont.systemFontOfSize_(26))
                     effect_view.addSubview_(icon_field)
 
-                # Title text
                 title_field = AppKit.NSTextField.alloc().initWithFrame_(
                     AppKit.NSMakeRect(68, 38, w - 86, 24)
                 )
@@ -273,7 +328,6 @@ class MacGameOverlay:
                 effect_view.addSubview_(title_field)
                 self._title_field = title_field
 
-                # Subtitle text
                 subtitle_field = AppKit.NSTextField.alloc().initWithFrame_(
                     AppKit.NSMakeRect(68, 14, w - 86, 22)
                 )
@@ -289,7 +343,6 @@ class MacGameOverlay:
 
                 self._panel = panel
 
-                # Smooth fade in
                 panel.setAlphaValue_(0.0)
                 panel.orderFrontRegardless()
 
@@ -357,7 +410,9 @@ class MacGameOverlay:
                 self._cleanup_panel()
 
 
-# Global overlay singleton
+# ---------------------------------------------------------------------------
+# Global singleton (macOS overlay; no-op on Windows)
+# ---------------------------------------------------------------------------
 _overlay_manager = MacGameOverlay()
 
 
@@ -370,7 +425,7 @@ def show_game_overlay(
     color: str = "default",
     sound_name: Optional[str] = None,
 ) -> bool:
-    """Display an on-screen HUD overlay notification visible even during games."""
+    """Display an on-screen HUD overlay notification (macOS only)."""
     return _overlay_manager.show(
         title=title,
         message=message,
@@ -387,6 +442,48 @@ def cleanup_notifications() -> None:
     _overlay_manager.close()
 
 
+# ---------------------------------------------------------------------------
+# Public cross-platform notification API
+# ---------------------------------------------------------------------------
+
+def send_notification(
+    message: str = "Blink!",
+    title: str = "EyeDoc",
+    subtitle: str = "",
+    sound: bool = True,
+    duration: float = 3.8,
+    color: str = "default",
+    sound_name: Optional[str] = None,
+) -> bool:
+    """Send a notification using the best available method for the current OS.
+
+    - macOS  → NSPanel HUD overlay (floats above games, no focus steal)
+    - Windows → winotify toast notification
+    """
+    if sys.platform == "darwin":
+        return show_game_overlay(
+            message=message,
+            title=title,
+            subtitle=subtitle,
+            duration=duration,
+            sound=sound,
+            color=color,
+            sound_name=sound_name,
+        )
+    elif sys.platform == "win32":
+        full_msg = f"{message}\n{subtitle}" if subtitle else message
+        return _send_windows_toast(
+            title=title,
+            message=full_msg,
+            sound=sound,
+            sound_name=sound_name or ("Glass" if color == "red" else "Ping"),
+        )
+    else:
+        # Linux / other – fallback print
+        print(f"[EyeDoc] {title}: {message}" + (f" – {subtitle}" if subtitle else ""))
+        return False
+
+
 def send_mac_notification(
     message: str = "Blink!",
     title: str = "EyeDoc",
@@ -396,16 +493,13 @@ def send_mac_notification(
     color: str = "default",
     sound_name: Optional[str] = None,
 ) -> bool:
-    """Send on-screen HUD overlay notification with the eye icon."""
-    if sys.platform != "darwin":
-        return False
-
-    return show_game_overlay(
+    """Send a blink reminder notification (cross-platform wrapper)."""
+    return send_notification(
         message=message,
         title=title,
         subtitle=subtitle,
-        duration=duration,
         sound=sound,
+        duration=duration,
         color=color,
         sound_name=sound_name,
     )
@@ -419,8 +513,8 @@ def send_distance_notification(
     duration: float = 3.8,
     sound_name: str = "Glass",
 ) -> bool:
-    """Send distance warning HUD overlay notification in red with an alert sound."""
-    return send_mac_notification(
+    """Send a distance warning notification (cross-platform)."""
+    return send_notification(
         message=message,
         title=title,
         subtitle=subtitle,

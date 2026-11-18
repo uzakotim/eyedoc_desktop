@@ -10,7 +10,6 @@ flatbuffers==25.12.19
 fonttools==4.65.0
 jaraco.functools==4.6.0
 kiwisolver==1.5.1
-macholib==1.16.4
 matplotlib==3.10.9
 mediapipe==1.2.3
 more-itertools==11.1.0
@@ -23,12 +22,21 @@ proxy_tools==0.1.0
 pycparser==3.11
 pyinstaller==6.22.3
 pyinstaller-hooks-contrib==2026.10
-pyobjc-core==12.2.2
-pyobjc-framework-Cocoa==12.2.2
-pyobjc-framework-Quartz==12.2.2
-pyobjc-framework-Security==12.2.2
-pyobjc-framework-UniformTypeIdentifiers==12.2.2
-pyobjc-framework-WebKit==12.2.2
+pystray==0.19.5
+
+# macOS-only
+macholib==1.16.4; sys_platform == "darwin"
+pyobjc-core; sys_platform == "darwin"
+pyobjc-framework-Cocoa; sys_platform == "darwin"
+pyobjc-framework-Quartz; sys_platform == "darwin"
+pyobjc-framework-WebKit; sys_platform == "darwin"
+pyobjc-framework-Security==12.2.2; sys_platform == "darwin"
+pyobjc-framework-UniformTypeIdentifiers==12.2.2; sys_platform == "darwin"
+
+# Windows-only
+pywin32; sys_platform == "win32"
+winotify; sys_platform == "win32"
+
 pyparsing==3.3.3
 python-dateutil==3.0.0
 pywebview==6.2.1

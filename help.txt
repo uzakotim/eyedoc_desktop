@@ -1,0 +1,2 @@
+For Windows you need to install WebView2
+https://developer.microsoft.com/microsoft-edge/webview2/

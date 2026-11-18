@@ -5,7 +5,9 @@ import sys
 import threading
 
 # Prevent matplotlib from trying to write to non-writable directories
-os.environ.setdefault("MPLCONFIGDIR", "/tmp/eyedoc_mpl")
+import tempfile as _tempfile
+os.environ.setdefault("MPLCONFIGDIR", os.path.join(_tempfile.gettempdir(), "eyedoc_mpl"))
+del _tempfile
 
 # Ensure backend directory is in sys.path
 backend_dir = os.path.dirname(os.path.abspath(__file__))

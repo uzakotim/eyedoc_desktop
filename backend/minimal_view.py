@@ -1,10 +1,10 @@
 """
-EyeDoc Minimal Circle View Overlay.
+EyeDoc Minimal Circle View Overlay – cross-platform.
 
-A floating, circular HUD overlay that displays the blink count for the current
-minute. Configured with a glowing cyan / warning-red border matching EyeDoc
-notifications, staying in front of all applications (including full-screen games
-and spaces), and draggable anywhere on the screen.
+macOS  – Floating NSPanel HUD circle (AppKit / PyObjC) that sits above
+         full-screen games and spaces, draggable, no focus steal.
+Windows – Lightweight tkinter frameless window that stays on top,
+          draggable, transparent background via HWND attributes.
 """
 
 from __future__ import annotations
@@ -13,6 +13,9 @@ import sys
 import threading
 from typing import Any, Callable, Optional
 
+# ---------------------------------------------------------------------------
+# macOS-only imports
+# ---------------------------------------------------------------------------
 try:
     import AppKit
     import Quartz
@@ -24,7 +27,9 @@ except ImportError:
     objc = None
     AppHelper = None
 
-
+# ---------------------------------------------------------------------------
+# macOS draggable NSView class (only defined when AppKit is present)
+# ---------------------------------------------------------------------------
 if AppKit is not None and objc is not None:
     try:
         EyeDocMinimalCircleView = objc.lookUpClass("EyeDocMinimalCircleView")
@@ -96,15 +101,321 @@ else:
     DraggableCircleView = None
 
 
+# ---------------------------------------------------------------------------
+# Windows tkinter overlay helper
+# ---------------------------------------------------------------------------
+
+class _WinMinimalOverlay:
+    """Lightweight always-on-top tkinter circle overlay for Windows."""
+
+    SIZE = 62
+
+    def __init__(self, blink_server=None, on_open_main_app: Optional[Callable] = None) -> None:
+        self.blink_server = blink_server
+        self.on_open_main_app = on_open_main_app
+
+        self._visible = False
+        self._lock = threading.RLock()
+        self._tk_thread: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
+        self._root = None          # tkinter.Tk – created on the tk thread
+        self._canvas = None
+        self._label_text = None    # tkinter.StringVar
+        self._drag_start: Optional[tuple[int, int]] = None
+
+        # Shared state updated from background poll
+        self._display_count: int = 0
+        self._display_warning: bool = False
+        self._display_face: bool = True
+        self._pending_update = threading.Event()
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def is_available(self) -> bool:
+        return sys.platform == "win32"
+
+    def is_visible(self) -> bool:
+        with self._lock:
+            return self._visible
+
+    def toggle(self) -> dict[str, bool]:
+        with self._lock:
+            if self._visible:
+                self.hide()
+                return {"visible": False}
+            else:
+                self.show()
+                return {"visible": True}
+
+    def show(self) -> bool:
+        with self._lock:
+            self._visible = True
+        self._ensure_tk_thread()
+        return True
+
+    def hide(self) -> bool:
+        with self._lock:
+            self._visible = False
+        if self._root:
+            try:
+                self._root.after(0, self._root.withdraw)
+            except Exception:
+                pass
+        return True
+
+    def remember_position(self, x: float, y: float) -> None:
+        pass  # position is remembered by the tk window itself
+
+    def on_blink(self, count: Optional[int] = None) -> None:
+        self._pending_update.set()
+
+    def close(self) -> None:
+        self._stop_event.set()
+        with self._lock:
+            self._visible = False
+        if self._root:
+            try:
+                self._root.after(0, self._root.destroy)
+            except Exception:
+                pass
+
+    # ------------------------------------------------------------------
+    # tkinter thread
+    # ------------------------------------------------------------------
+
+    def _ensure_tk_thread(self) -> None:
+        if self._tk_thread and self._tk_thread.is_alive():
+            # Already running – just show the window
+            if self._root:
+                try:
+                    self._root.after(0, self._root.deiconify)
+                except Exception:
+                    pass
+            return
+
+        self._stop_event.clear()
+        self._tk_thread = threading.Thread(
+            target=self._run_tk,
+            name="MinimalOverlayTk",
+            daemon=True,
+        )
+        self._tk_thread.start()
+
+    def _run_tk(self) -> None:
+        try:
+            import tkinter as tk
+
+            root = tk.Tk()
+            self._root = root
+
+            root.overrideredirect(True)   # frameless
+            root.attributes("-topmost", True)
+            root.attributes("-alpha", 0.92)
+
+            # Place near top-right of primary screen
+            sw = root.winfo_screenwidth()
+            sh = root.winfo_screenheight()
+            x = sw - self.SIZE - 28
+            y = 50   # below Windows taskbar / just below top
+            root.geometry(f"{self.SIZE}x{self.SIZE}+{x}+{y}")
+
+            # Dark background matching EyeDoc palette
+            BG = "#0f1424"
+            root.configure(bg=BG)
+
+            # On Windows, make the background colour transparent so we get
+            # a "circle" effect. We use a rounded canvas instead.
+            canvas = tk.Canvas(
+                root,
+                width=self.SIZE,
+                height=self.SIZE,
+                bg=BG,
+                highlightthickness=0,
+            )
+            canvas.pack()
+            self._canvas = canvas
+
+            r = self.SIZE // 2
+            # Cyan glowing border circle
+            canvas.create_oval(
+                2, 2, self.SIZE - 2, self.SIZE - 2,
+                outline="#4dd9f5",
+                width=2,
+                tags="border",
+            )
+
+            # Count label
+            label_var = tk.StringVar(value="0")
+            self._label_text = label_var
+            label = tk.Label(
+                canvas,
+                textvariable=label_var,
+                bg=BG,
+                fg="#eaf8ff",
+                font=("Consolas", 18, "bold"),
+            )
+            # Place label in the centre of the canvas
+            canvas.create_window(r, r, window=label, tags="label")
+
+            # Tooltip
+            root.title("EyeDoc")
+
+            # Drag support
+            def on_mouse_down(event):
+                self._drag_start = (event.x_root - root.winfo_x(),
+                                    event.y_root - root.winfo_y())
+
+            def on_mouse_drag(event):
+                if self._drag_start:
+                    nx = event.x_root - self._drag_start[0]
+                    ny = event.y_root - self._drag_start[1]
+                    root.geometry(f"+{nx}+{ny}")
+
+            def on_double_click(event):
+                if self.on_open_main_app:
+                    threading.Thread(target=self.on_open_main_app, daemon=True).start()
+
+            def on_right_click(event):
+                try:
+                    import tkinter.Menu as _M
+                except Exception:
+                    pass
+                menu = tk.Menu(root, tearoff=0)
+                menu.add_command(label="Hide Minimal View", command=self.hide)
+                if self.on_open_main_app:
+                    menu.add_command(label="Open EyeDoc Window",
+                                     command=self.on_open_main_app)
+                try:
+                    menu.tk_popup(event.x_root, event.y_root)
+                finally:
+                    menu.grab_release()
+
+            canvas.bind("<ButtonPress-1>", on_mouse_down)
+            canvas.bind("<B1-Motion>", on_mouse_drag)
+            canvas.bind("<Double-Button-1>", on_double_click)
+            canvas.bind("<Button-3>", on_right_click)
+            label.bind("<ButtonPress-1>", on_mouse_down)
+            label.bind("<B1-Motion>", on_mouse_drag)
+            label.bind("<Double-Button-1>", on_double_click)
+            label.bind("<Button-3>", on_right_click)
+
+            # Periodic UI update scheduled from within the tk event loop
+            def _poll():
+                if self._stop_event.is_set():
+                    root.destroy()
+                    return
+
+                if not self._visible:
+                    root.withdraw()
+                else:
+                    root.deiconify()
+
+                # Read shared state
+                count = 0
+                warning = False
+                face = True
+                if self.blink_server:
+                    try:
+                        s = self.blink_server.get_status()
+                        count = s.get("interval_blink_count", 0)
+                        warning = s.get("last_interval_warning", False)
+                        face = s.get("face_detected", False)
+                    except Exception:
+                        pass
+
+                # Update label text
+                val = str(count) if face else "–"
+                if self._label_text:
+                    self._label_text.set(val)
+
+                # Update colours
+                if warning:
+                    border_col = "#f54040"
+                    text_col = "#ffd6d6"
+                else:
+                    border_col = "#4dd9f5"
+                    text_col = "#eaf8ff"
+
+                try:
+                    canvas.itemconfig("border", outline=border_col)
+                    label.config(fg=text_col)
+                except Exception:
+                    pass
+
+                root.after(350, _poll)
+
+            root.after(100, _poll)
+            root.mainloop()
+        except Exception as exc:
+            print(f"[MinimalOverlay/Win] tkinter thread error: {exc}")
+        finally:
+            self._root = None
+            self._canvas = None
+            self._label_text = None
+
+
+# ---------------------------------------------------------------------------
+# Unified public class
+# ---------------------------------------------------------------------------
+
 class MinimalCircleOverlay:
+    """Cross-platform minimal blink-count circle overlay.
+
+    On macOS uses NSPanel; on Windows uses a tkinter frameless window.
+    """
+
+    def __init__(self, blink_server=None, on_open_main_app: Optional[Callable] = None) -> None:
+        self.blink_server = blink_server
+        self.on_open_main_app = on_open_main_app
+
+        if sys.platform == "darwin":
+            self._impl: Any = _MacMinimalOverlay(blink_server, on_open_main_app)
+        elif sys.platform == "win32":
+            self._impl = _WinMinimalOverlay(blink_server, on_open_main_app)
+        else:
+            self._impl = _NullMinimalOverlay()
+
+    # Delegate everything to the platform implementation
+    def is_available(self) -> bool:
+        return self._impl.is_available()
+
+    def is_visible(self) -> bool:
+        return self._impl.is_visible()
+
+    def toggle(self) -> dict[str, bool]:
+        return self._impl.toggle()
+
+    def show(self) -> bool:
+        return self._impl.show()
+
+    def hide(self) -> bool:
+        return self._impl.hide()
+
+    def remember_position(self, x: float, y: float) -> None:
+        self._impl.remember_position(x, y)
+
+    def on_blink(self, count: Optional[int] = None) -> None:
+        self._impl.on_blink(count)
+
+    def close(self) -> None:
+        self._impl.close()
+
+
+# ---------------------------------------------------------------------------
+# macOS implementation (extracted from the original file)
+# ---------------------------------------------------------------------------
+
+class _MacMinimalOverlay:
     """Manages an always-on-top circular HUD overlay window on macOS."""
 
     def __init__(self, blink_server=None, on_open_main_app: Optional[Callable] = None) -> None:
         self.blink_server = blink_server
         self.on_open_main_app = on_open_main_app
-        self._panel: Optional[AppKit.NSPanel] = None
-        self._effect_view: Optional[AppKit.NSVisualEffectView] = None
-        self._label: Optional[AppKit.NSTextField] = None
+        self._panel = None
+        self._effect_view = None
+        self._label = None
         self._visible = False
         self._last_position: Optional[tuple[float, float]] = None
         self._lock = threading.RLock()
@@ -133,10 +444,8 @@ class MinimalCircleOverlay:
     def show(self) -> bool:
         if not self.is_available():
             return False
-
         with self._lock:
             self._visible = True
-
         if AppHelper is not None:
             AppHelper.callAfter(self._show_on_main_thread)
         self._start_polling()
@@ -145,7 +454,6 @@ class MinimalCircleOverlay:
     def hide(self) -> bool:
         with self._lock:
             self._visible = False
-
         if AppHelper is not None:
             AppHelper.callAfter(self._hide_on_main_thread)
         self._stop_polling()
@@ -156,7 +464,6 @@ class MinimalCircleOverlay:
             self._last_position = (x, y)
 
     def on_blink(self, count: Optional[int] = None) -> None:
-        """Triggered immediately when a blink occurs."""
         if not self._visible or AppHelper is None:
             return
         AppHelper.callAfter(self._on_blink_main_thread)
@@ -174,14 +481,11 @@ class MinimalCircleOverlay:
             AppHelper.callAfter(_destroy)
 
     # ------------------------------------------------------------------
-    # Internal Main-Thread Logic
-    # ------------------------------------------------------------------
 
     def _show_on_main_thread(self) -> None:
         try:
             if self._panel is None:
                 self._build_panel()
-
             if self._panel is not None:
                 if self._last_position:
                     self._panel.setFrameOrigin_(
@@ -206,7 +510,6 @@ class MinimalCircleOverlay:
         s_frame = screen.frame() if screen else AppKit.NSMakeRect(0, 0, 1440, 900)
 
         if not self._last_position:
-            # Default to top-right of main screen, below macOS menubar
             x = s_frame.origin.x + s_frame.size.width - size - 28.0
             y = s_frame.origin.y + s_frame.size.height - size - 50.0
             self._last_position = (x, y)
@@ -222,7 +525,6 @@ class MinimalCircleOverlay:
             False,
         )
 
-        # Shielding window level guarantees visibility above full-screen games & any other app
         panel.setLevel_(Quartz.CGShieldingWindowLevel())
         panel.setCollectionBehavior_(
             AppKit.NSWindowCollectionBehaviorCanJoinAllSpaces
@@ -243,7 +545,6 @@ class MinimalCircleOverlay:
         content.setWantsLayer_(True)
         content.setToolTip_("EyeDoc — Blinks this minute (drag to move, right-click to close)")
 
-        # Frosted glass background matching EyeDoc HUD notifications
         effect_view = AppKit.NSVisualEffectView.alloc().initWithFrame_(
             AppKit.NSMakeRect(0, 0, size, size)
         )
@@ -257,7 +558,6 @@ class MinimalCircleOverlay:
         layer.setMasksToBounds_(True)
         layer.setBorderWidth_(1.5)
 
-        # Notification-style cyan glowing border & dark frosted background
         border_color = AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
             0.3, 0.85, 0.95, 0.65
         ).CGColor()
@@ -270,7 +570,6 @@ class MinimalCircleOverlay:
         content.addSubview_(effect_view)
         self._effect_view = effect_view
 
-        # Number label inside circle
         label = AppKit.NSTextField.alloc().initWithFrame_(
             AppKit.NSMakeRect(0, (size - 30) / 2.0 - 1.0, size, 30)
         )
@@ -316,7 +615,6 @@ class MinimalCircleOverlay:
             self._last_warning = warning
             self._last_face = face_detected
 
-            # Update text
             if self._label:
                 val_str = str(count) if face_detected else "–"
                 self._label.setStringValue_(val_str)
@@ -329,7 +627,6 @@ class MinimalCircleOverlay:
                         AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.92, 0.97, 1.0, 1.0)
                     )
 
-            # Update border and background (cyan vs warning red)
             if self._effect_view and self._effect_view.layer():
                 layer = self._effect_view.layer()
                 if warning:
@@ -357,7 +654,6 @@ class MinimalCircleOverlay:
                 return
             self._update_display(force=True)
 
-            # Subtle flash pulse on blink
             if self._effect_view and self._effect_view.layer() and not self._last_warning:
                 layer = self._effect_view.layer()
                 pulse_border = AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
@@ -392,3 +688,33 @@ class MinimalCircleOverlay:
     def _stop_polling(self) -> None:
         self._stop_poll.set()
         self._poll_thread = None
+
+
+# ---------------------------------------------------------------------------
+# Null implementation (Linux / unsupported platforms)
+# ---------------------------------------------------------------------------
+
+class _NullMinimalOverlay:
+    def is_available(self) -> bool:
+        return False
+
+    def is_visible(self) -> bool:
+        return False
+
+    def toggle(self) -> dict[str, bool]:
+        return {"visible": False}
+
+    def show(self) -> bool:
+        return False
+
+    def hide(self) -> bool:
+        return False
+
+    def remember_position(self, x: float, y: float) -> None:
+        pass
+
+    def on_blink(self, count: Optional[int] = None) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
