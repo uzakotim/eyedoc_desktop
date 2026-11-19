@@ -259,12 +259,12 @@ export default function App() {
 
   return (
     <div
-      className="w-full h-full flex flex-col p-1.5 select-none font-sans"
+      className="w-screen h-screen flex flex-col bg-slate-950 overflow-hidden select-none font-sans"
       onMouseEnter={() => setShowControls(true)}
       onMouseLeave={() => setShowControls(false)}
     >
       {/* Outer rounded container with glowing glassmorphic background */}
-      <div className="w-full h-full flex flex-col rounded-2xl bg-slate-950/92 backdrop-blur-2xl border border-white/15 shadow-[0_12px_36px_rgba(0,0,0,0.65),0_0_0_1px_rgba(255,255,255,0.06)] overflow-hidden">
+      <div className="w-full h-full flex flex-col bg-slate-950 overflow-hidden">
         {/* Header bar (Drag Region) */}
         <header className="drag-region pywebview-drag-region h-9 min-h-[36px] px-3 flex items-center justify-between bg-slate-900cursor-grab active:cursor-grabbing">
           {/* Left: Branding & Status Dot */}

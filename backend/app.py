@@ -410,21 +410,36 @@ def main():
         WINDOW_WIDTH,
         WINDOW_HEIGHT,
     )
-
-    window = webview.create_window(
-        title="EyeDoc Camera",
-        url=url,
-        js_api=api,
-        width=WINDOW_WIDTH,
-        height=WINDOW_HEIGHT,
-        x=initial_x,
-        y=initial_y,
-        resizable=False,
-        frameless=True,
-        transparent=True,
-        on_top=True,
-        shadow=True,
-    )
+    # if mac
+    if sys.platform == "darwin":
+        window = webview.create_window(
+            title="EyeDoc Camera",
+            url=url,
+            js_api=api,
+            width=WINDOW_WIDTH,
+            height=WINDOW_HEIGHT,
+            x=initial_x,
+            y=initial_y,
+            resizable=False,
+            frameless=True,
+            transparent=True,
+            on_top=True,
+            shadow=True,
+        )
+    else:
+        window = webview.create_window(
+            "EyeDoc Camera",
+            url=url,
+            width=WINDOW_WIDTH,
+            height=WINDOW_HEIGHT,
+            frameless=True,
+            on_top=True,
+            x=initial_x,
+            y=initial_y,
+            background_color="#020617",
+            js_api=api,
+        )
+    
 
     window_state["window"] = window
 

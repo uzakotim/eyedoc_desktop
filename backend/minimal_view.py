@@ -4,7 +4,7 @@ EyeDoc Minimal Circle View Overlay – cross-platform.
 macOS  – Floating NSPanel HUD circle (AppKit / PyObjC) that sits above
          full-screen games and spaces, draggable, no focus steal.
 Windows – Lightweight tkinter frameless window that stays on top,
-          draggable, transparent background via HWND attributes.
+          draggable, transparent background via color-key attribute.
 """
 
 from __future__ import annotations
@@ -109,6 +109,14 @@ class _WinMinimalOverlay:
     """Lightweight always-on-top tkinter circle overlay for Windows."""
 
     SIZE = 62
+    TRANSPARENT_KEY = "#ff00fe"
+    FILL_NORMAL = "#0f1424"
+    FILL_WARNING = "#290a0e"
+    BORDER_NORMAL = "#4dd9f5"
+    BORDER_PULSE = "#8cecff"
+    BORDER_WARNING = "#f54040"
+    TEXT_NORMAL = "#eaf8ff"
+    TEXT_WARNING = "#ffd6d6"
 
     def __init__(self, blink_server=None, on_open_main_app: Optional[Callable] = None) -> None:
         self.blink_server = blink_server
@@ -118,16 +126,12 @@ class _WinMinimalOverlay:
         self._lock = threading.RLock()
         self._tk_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
-        self._root = None          # tkinter.Tk – created on the tk thread
+        self._root = None
         self._canvas = None
-        self._label_text = None    # tkinter.StringVar
+        self._text_id = None
+        self._last_position: Optional[tuple[int, int]] = None
         self._drag_start: Optional[tuple[int, int]] = None
-
-        # Shared state updated from background poll
-        self._display_count: int = 0
-        self._display_warning: bool = False
-        self._display_face: bool = True
-        self._pending_update = threading.Event()
+        self._pulse_timer: Optional[threading.Timer] = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -145,11 +149,12 @@ class _WinMinimalOverlay:
             if self._visible:
                 self.hide()
                 return {"visible": False}
-            else:
-                self.show()
-                return {"visible": True}
+            self.show()
+            return {"visible": True}
 
     def show(self) -> bool:
+        if not self.is_available():
+            return False
         with self._lock:
             self._visible = True
         self._ensure_tk_thread()
@@ -158,26 +163,41 @@ class _WinMinimalOverlay:
     def hide(self) -> bool:
         with self._lock:
             self._visible = False
-        if self._root:
+            root = self._root
+        if root is not None:
             try:
-                self._root.after(0, self._root.withdraw)
+                root.after(0, root.withdraw)
             except Exception:
                 pass
         return True
 
     def remember_position(self, x: float, y: float) -> None:
-        pass  # position is remembered by the tk window itself
+        with self._lock:
+            self._last_position = (int(x), int(y))
 
     def on_blink(self, count: Optional[int] = None) -> None:
-        self._pending_update.set()
+        with self._lock:
+            if not self._visible:
+                return
+            root = self._root
+            canvas = self._canvas
+        if root is not None and canvas is not None:
+            try:
+                root.after(0, lambda: self._pulse_on_tk(root, canvas, count))
+            except Exception:
+                pass
 
     def close(self) -> None:
         self._stop_event.set()
         with self._lock:
             self._visible = False
-        if self._root:
+            root = self._root
+            if self._pulse_timer is not None:
+                self._pulse_timer.cancel()
+                self._pulse_timer = None
+        if root is not None:
             try:
-                self._root.after(0, self._root.destroy)
+                root.after(0, root.destroy)
             except Exception:
                 pass
 
@@ -186,225 +206,254 @@ class _WinMinimalOverlay:
     # ------------------------------------------------------------------
 
     def _ensure_tk_thread(self) -> None:
-        if self._tk_thread and self._tk_thread.is_alive():
-            # Already running – just show the window
-            if self._root:
+        with self._lock:
+            thread = self._tk_thread
+            root = self._root
+
+        if thread is not None and thread.is_alive():
+            if root is not None:
                 try:
-                    self._root.after(0, self._root.deiconify)
+                    root.after(0, self._show_window_on_tk)
                 except Exception:
                     pass
             return
 
         self._stop_event.clear()
-        self._tk_thread = threading.Thread(
+        new_thread = threading.Thread(
             target=self._run_tk,
             name="MinimalOverlayTk",
             daemon=True,
         )
-        self._tk_thread.start()
+        with self._lock:
+            self._tk_thread = new_thread
+        new_thread.start()
+
+    def _show_window_on_tk(self) -> None:
+        with self._lock:
+            root = self._root
+            visible = self._visible
+        if root is not None and visible:
+            root.deiconify()
+            root.lift()
+            root.attributes("-topmost", True)
+
+    def _pulse_on_tk(self, root, canvas, count: Optional[int]) -> None:
+        if self._stop_event.is_set() or not self._visible:
+            return
+        try:
+            if count is not None and self._text_id is not None:
+                canvas.itemconfig(self._text_id, text=str(count))
+
+            current_outline = canvas.itemcget("border", "outline")
+            if current_outline != self.BORDER_WARNING:
+                canvas.itemconfig("border", outline=self.BORDER_PULSE)
+
+                with self._lock:
+                    if self._pulse_timer is not None:
+                        self._pulse_timer.cancel()
+
+                    def _restore() -> None:
+                        if self._stop_event.is_set():
+                            return
+                        try:
+                            root.after(0, lambda: canvas.itemconfig("border", outline=self.BORDER_NORMAL))
+                        except Exception:
+                            pass
+
+                    timer = threading.Timer(0.18, _restore)
+                    timer.daemon = True
+                    self._pulse_timer = timer
+                    timer.start()
+        except Exception:
+            pass
 
     def _run_tk(self) -> None:
+        root = None
         try:
             import tkinter as tk
 
             root = tk.Tk()
-            self._root = root
+            size = int(self.SIZE)
 
-            root.overrideredirect(True)   # frameless
+            with self._lock:
+                pos = self._last_position
+
+            if pos is None:
+                sw = root.winfo_screenwidth()
+                x = max(20, sw - size - 28)
+                y = 50
+                pos = (x, y)
+                with self._lock:
+                    self._last_position = pos
+
+            root.overrideredirect(True)
             root.attributes("-topmost", True)
-            root.attributes("-alpha", 0.92)
+            root.title("EyeDoc")
+            root.configure(bg=self.TRANSPARENT_KEY)
+            root.geometry(f"{size}x{size}+{pos[0]}+{pos[1]}")
 
-            # Place near top-right of primary screen
-            sw = root.winfo_screenwidth()
-            sh = root.winfo_screenheight()
-            x = sw - self.SIZE - 28
-            y = 50   # below Windows taskbar / just below top
-            root.geometry(f"{self.SIZE}x{self.SIZE}+{x}+{y}")
+            transparent_active = False
+            try:
+                root.wm_attributes("-transparentcolor", self.TRANSPARENT_KEY)
+                transparent_active = True
+            except tk.TclError:
+                pass
 
-            # Dark background matching EyeDoc palette
-            BG = "#0f1424"
-            root.configure(bg=BG)
+            canvas_bg = self.TRANSPARENT_KEY if transparent_active else self.FILL_NORMAL
 
-            # On Windows, make the background colour transparent so we get
-            # a "circle" effect. We use a rounded canvas instead.
             canvas = tk.Canvas(
                 root,
-                width=self.SIZE,
-                height=self.SIZE,
-                bg=BG,
+                width=size,
+                height=size,
+                bg=canvas_bg,
                 highlightthickness=0,
+                bd=0,
             )
-            canvas.pack()
-            self._canvas = canvas
+            canvas.pack(fill="both", expand=True)
 
-            r = self.SIZE // 2
-            # Cyan glowing border circle
+            pad = 2
+            center = size / 2.0
             canvas.create_oval(
-                2, 2, self.SIZE - 2, self.SIZE - 2,
-                outline="#4dd9f5",
+                pad,
+                pad,
+                size - pad,
+                size - pad,
+                fill=self.FILL_NORMAL,
+                outline=self.BORDER_NORMAL,
                 width=2,
                 tags="border",
             )
 
-            # Count label
-            label_var = tk.StringVar(value="0")
-            self._label_text = label_var
-            label = tk.Label(
-                canvas,
-                textvariable=label_var,
-                bg=BG,
-                fg="#eaf8ff",
+            text_id = canvas.create_text(
+                center,
+                center,
+                text="0",
+                fill=self.TEXT_NORMAL,
                 font=("Consolas", 18, "bold"),
+                tags="label",
             )
-            # Place label in the centre of the canvas
-            canvas.create_window(r, r, window=label, tags="label")
 
-            # Tooltip
-            root.title("EyeDoc")
+            with self._lock:
+                self._root = root
+                self._canvas = canvas
+                self._text_id = text_id
 
-            # Drag support
-            def on_mouse_down(event):
-                self._drag_start = (event.x_root - root.winfo_x(),
-                                    event.y_root - root.winfo_y())
+            def on_mouse_down(event) -> None:
+                self._drag_start = (
+                    event.x_root - root.winfo_x(),
+                    event.y_root - root.winfo_y(),
+                )
 
-            def on_mouse_drag(event):
-                if self._drag_start:
-                    nx = event.x_root - self._drag_start[0]
-                    ny = event.y_root - self._drag_start[1]
-                    root.geometry(f"+{nx}+{ny}")
+            def on_mouse_drag(event) -> None:
+                if self._drag_start is None:
+                    return
+                nx = event.x_root - self._drag_start[0]
+                ny = event.y_root - self._drag_start[1]
+                root.geometry(f"+{nx}+{ny}")
+                self.remember_position(nx, ny)
 
-            def on_double_click(event):
-                if self.on_open_main_app:
-                    threading.Thread(target=self.on_open_main_app, daemon=True).start()
+            def on_double_click(_event) -> None:
+                cb = self.on_open_main_app
+                if cb:
+                    threading.Thread(target=cb, daemon=True).start()
 
-            def on_right_click(event):
-                try:
-                    import tkinter.Menu as _M
-                except Exception:
-                    pass
+            def on_right_click(event) -> None:
                 menu = tk.Menu(root, tearoff=0)
                 menu.add_command(label="Hide Minimal View", command=self.hide)
-                if self.on_open_main_app:
-                    menu.add_command(label="Open EyeDoc Window",
-                                     command=self.on_open_main_app)
+                cb = self.on_open_main_app
+                if cb:
+                    menu.add_command(
+                        label="Open EyeDoc Window",
+                        command=lambda: threading.Thread(target=cb, daemon=True).start(),
+                    )
                 try:
                     menu.tk_popup(event.x_root, event.y_root)
                 finally:
-                    menu.grab_release()
-
-            canvas.bind("<ButtonPress-1>", on_mouse_down)
-            canvas.bind("<B1-Motion>", on_mouse_drag)
-            canvas.bind("<Double-Button-1>", on_double_click)
-            canvas.bind("<Button-3>", on_right_click)
-            label.bind("<ButtonPress-1>", on_mouse_down)
-            label.bind("<B1-Motion>", on_mouse_drag)
-            label.bind("<Double-Button-1>", on_double_click)
-            label.bind("<Button-3>", on_right_click)
-
-            # Periodic UI update scheduled from within the tk event loop
-            def _poll():
-                if self._stop_event.is_set():
-                    root.destroy()
-                    return
-
-                if not self._visible:
-                    root.withdraw()
-                else:
-                    root.deiconify()
-
-                # Read shared state
-                count = 0
-                warning = False
-                face = True
-                if self.blink_server:
                     try:
-                        s = self.blink_server.get_status()
-                        count = s.get("interval_blink_count", 0)
-                        warning = s.get("last_interval_warning", False)
-                        face = s.get("face_detected", False)
+                        menu.grab_release()
                     except Exception:
                         pass
 
-                # Update label text
-                val = str(count) if face else "–"
-                if self._label_text:
-                    self._label_text.set(val)
+            canvas.tag_bind("border", "<ButtonPress-1>", on_mouse_down)
+            canvas.tag_bind("border", "<B1-Motion>", on_mouse_drag)
+            canvas.tag_bind("border", "<Double-Button-1>", on_double_click)
+            canvas.tag_bind("border", "<Button-3>", on_right_click)
 
-                # Update colours
-                if warning:
-                    border_col = "#f54040"
-                    text_col = "#ffd6d6"
+            canvas.tag_bind("label", "<ButtonPress-1>", on_mouse_down)
+            canvas.tag_bind("label", "<B1-Motion>", on_mouse_drag)
+            canvas.tag_bind("label", "<Double-Button-1>", on_double_click)
+            canvas.tag_bind("label", "<Button-3>", on_right_click)
+
+            def _poll() -> None:
+                if self._stop_event.is_set():
+                    try:
+                        root.destroy()
+                    except Exception:
+                        pass
+                    return
+
+                with self._lock:
+                    visible = self._visible
+
+                if not visible:
+                    root.withdraw()
                 else:
-                    border_col = "#4dd9f5"
-                    text_col = "#eaf8ff"
+                    if not root.winfo_viewable():
+                        root.deiconify()
+                        root.lift()
 
-                try:
-                    canvas.itemconfig("border", outline=border_col)
-                    label.config(fg=text_col)
-                except Exception:
-                    pass
+                    count = 0
+                    warning = False
+                    face = True
+                    if self.blink_server is not None:
+                        try:
+                            status = self.blink_server.get_status()
+                            count = status.get("interval_blink_count", 0)
+                            warning = bool(status.get("last_interval_warning", False))
+                            face = bool(status.get("face_detected", False))
+                        except Exception:
+                            pass
+
+                    display_str = str(count) if face else "–"
+                    if warning:
+                        fill_col = self.FILL_WARNING
+                        border_col = self.BORDER_WARNING
+                        text_col = self.TEXT_WARNING
+                    else:
+                        fill_col = self.FILL_NORMAL
+                        border_col = self.BORDER_NORMAL
+                        text_col = self.TEXT_NORMAL
+
+                    try:
+                        canvas.itemconfig(text_id, text=display_str, fill=text_col)
+                        canvas.itemconfig("border", fill=fill_col, outline=border_col)
+                    except Exception:
+                        pass
 
                 root.after(350, _poll)
 
-            root.after(100, _poll)
+            root.after(50, _poll)
             root.mainloop()
         except Exception as exc:
             print(f"[MinimalOverlay/Win] tkinter thread error: {exc}")
         finally:
-            self._root = None
-            self._canvas = None
-            self._label_text = None
+            with self._lock:
+                self._root = None
+                self._canvas = None
+                self._text_id = None
+                self._tk_thread = None
+                if self._pulse_timer is not None:
+                    self._pulse_timer.cancel()
+                    self._pulse_timer = None
+            if root is not None:
+                try:
+                    root.destroy()
+                except Exception:
+                    pass
 
 
 # ---------------------------------------------------------------------------
-# Unified public class
-# ---------------------------------------------------------------------------
-
-class MinimalCircleOverlay:
-    """Cross-platform minimal blink-count circle overlay.
-
-    On macOS uses NSPanel; on Windows uses a tkinter frameless window.
-    """
-
-    def __init__(self, blink_server=None, on_open_main_app: Optional[Callable] = None) -> None:
-        self.blink_server = blink_server
-        self.on_open_main_app = on_open_main_app
-
-        if sys.platform == "darwin":
-            self._impl: Any = _MacMinimalOverlay(blink_server, on_open_main_app)
-        elif sys.platform == "win32":
-            self._impl = _WinMinimalOverlay(blink_server, on_open_main_app)
-        else:
-            self._impl = _NullMinimalOverlay()
-
-    # Delegate everything to the platform implementation
-    def is_available(self) -> bool:
-        return self._impl.is_available()
-
-    def is_visible(self) -> bool:
-        return self._impl.is_visible()
-
-    def toggle(self) -> dict[str, bool]:
-        return self._impl.toggle()
-
-    def show(self) -> bool:
-        return self._impl.show()
-
-    def hide(self) -> bool:
-        return self._impl.hide()
-
-    def remember_position(self, x: float, y: float) -> None:
-        self._impl.remember_position(x, y)
-
-    def on_blink(self, count: Optional[int] = None) -> None:
-        self._impl.on_blink(count)
-
-    def close(self) -> None:
-        self._impl.close()
-
-
-# ---------------------------------------------------------------------------
-# macOS implementation (extracted from the original file)
+# macOS implementation
 # ---------------------------------------------------------------------------
 
 class _MacMinimalOverlay:
@@ -437,9 +486,8 @@ class _MacMinimalOverlay:
             if self._visible:
                 self.hide()
                 return {"visible": False}
-            else:
-                self.show()
-                return {"visible": True}
+            self.show()
+            return {"visible": True}
 
     def show(self) -> bool:
         if not self.is_available():
@@ -718,3 +766,49 @@ class _NullMinimalOverlay:
 
     def close(self) -> None:
         pass
+
+
+# ---------------------------------------------------------------------------
+# Unified public class
+# ---------------------------------------------------------------------------
+
+class MinimalCircleOverlay:
+    """Cross-platform minimal blink-count circle overlay.
+
+    On macOS uses NSPanel; on Windows uses a tkinter frameless window.
+    """
+
+    def __init__(self, blink_server=None, on_open_main_app: Optional[Callable] = None) -> None:
+        self.blink_server = blink_server
+        self.on_open_main_app = on_open_main_app
+
+        if sys.platform == "darwin":
+            self._impl: Any = _MacMinimalOverlay(blink_server, on_open_main_app)
+        elif sys.platform == "win32":
+            self._impl = _WinMinimalOverlay(blink_server, on_open_main_app)
+        else:
+            self._impl = _NullMinimalOverlay()
+
+    def is_available(self) -> bool:
+        return self._impl.is_available()
+
+    def is_visible(self) -> bool:
+        return self._impl.is_visible()
+
+    def toggle(self) -> dict[str, bool]:
+        return self._impl.toggle()
+
+    def show(self) -> bool:
+        return self._impl.show()
+
+    def hide(self) -> bool:
+        return self._impl.hide()
+
+    def remember_position(self, x: float, y: float) -> None:
+        self._impl.remember_position(x, y)
+
+    def on_blink(self, count: Optional[int] = None) -> None:
+        self._impl.on_blink(count)
+
+    def close(self) -> None:
+        self._impl.close()

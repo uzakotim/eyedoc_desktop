@@ -7,7 +7,8 @@
     "dev:frontend": "cd frontend && yarn run dev",
     "build:frontend": "cd frontend && yarn run build",
     "dev:backend": "python backend/app.py",
-    "dev": "yarn run build:frontend && source .venv/bin/activate && concurrently \"yarn run dev:frontend\" \"python3.10 backend/app.py\""
+    "dev": "yarn run build:frontend && source .venv/bin/activate && concurrently \"yarn run dev:frontend\" \"python3.10 backend/app.py\"",
+    "win": "yarn run build:frontend && .venv/Scripts/activate && concurrently \"yarn run dev:frontend\" \"python backend/app.py\""
   },
   "repository": {
     "type": "git",
